@@ -69,13 +69,11 @@
 (define (package-name package)
   (and (pair? package)
        (eq? 'package (car package))
-       (cond ((assoc-get (cdr package) 'name)
-              => (lambda (x) (and (pair? x) x)))
-             ((assq 'library (cdr package))
-              => (lambda (x) (library-name x)))
-             ((assq 'progam (cdr package))
-              => (lambda (x) (program-name x)))
-             (else #f))))
+       (or (cond ((assoc-get (cdr package) 'name)
+                  => (lambda (x) (and (pair? x) x)))
+                 (else #f))
+           (any library-name (package-libraries package))
+           (any program-name (package-programs package)))))
 
 (define (package-email pkg)
   (and (package? pkg)
@@ -92,7 +90,10 @@
      ((not (package? pkg))
       #f)
      ((assoc-get (cdr pkg) 'authors)
-      => (lambda (authors) (if show-email? authors (strip-email authors))))
+      => (lambda (authors)
+           (cond (show-email? authors)
+                 ((pair? authors) (map strip-email authors))
+                 (else (strip-email authors)))))
      (else
       (let ((email (package-email pkg)))
         (or (cond
@@ -247,7 +248,7 @@
                  (package-libraries package)))))
 
 (define (package-dependencies impl cfg package)
-  (append-map (lambda (lib) (library-dependencies cfg impl lib))
+  (append-map (lambda (lib) (library-dependencies impl cfg lib))
               (append (package-libraries package)
                       (package-programs package))))
 
@@ -394,6 +395,11 @@
 (define (library-dependencies impl cfg lib)
   (append-map
    (lambda (x) (or (and (pair? x) (eq? 'depends (car x)) (cdr x)) '()))
+   (cdr (library-for-impl impl cfg lib))))
+
+(define (library-foreign-dependencies impl cfg lib)
+  (append-map
+   (lambda (x) (or (and (pair? x) (eq? 'foreign-depends (car x)) (cdr x)) '()))
    (cdr (library-for-impl impl cfg lib))))
 
 (define (parse-library-name str)

@@ -32,7 +32,7 @@ static sexp sexp_lookup_source_info (sexp src, int ip) {
   if (src && sexp_procedurep(src))
     src = sexp_procedure_source(src);
   if (src && sexp_vectorp(src) && sexp_vector_length(src) > 0) {
-    for (i=1; i<sexp_vector_length(src); i++)
+    for (i=1; i<(int)sexp_vector_length(src); i++)
       if (sexp_unbox_fixnum(sexp_car(sexp_vector_ref(src, sexp_make_fixnum(i)))) > ip)
         return sexp_cdr(sexp_vector_ref(src, sexp_make_fixnum(i-1)));
     return sexp_cdr(sexp_vector_ref(src, sexp_make_fixnum(sexp_vector_length(src)-1)));
@@ -82,7 +82,23 @@ sexp sexp_stack_trace_op (sexp ctx, sexp self, sexp_sint_t n, sexp out) {
 
 /************************* code generation ****************************/
 
+#if SEXP_USE_ALIGNED_BYTECODE
+void sexp_context_align_pos(sexp ctx) {
+  sexp_uint_t i, pos = sexp_unbox_fixnum(sexp_context_pos(ctx));
+  sexp_uint_t new_pos = sexp_word_align(pos);
+  if (new_pos > pos) {
+    sexp_expand_bcode(ctx, (sexp_sint_t)new_pos - pos);
+    if (pos > 0)
+      for (i=pos; i<new_pos; ++i)
+        sexp_bytecode_data(sexp_context_bc(ctx))[i] =
+          sexp_bytecode_data(sexp_context_bc(ctx))[pos-1];
+    sexp_context_pos(ctx) = sexp_make_fixnum(new_pos);
+  }
+}
+#endif
+
 static void sexp_inc_context_pos(sexp ctx, sexp_sint_t off) {
+  sexp_expand_bcode(ctx, off);
   sexp_context_pos(ctx) = sexp_fx_add(sexp_context_pos(ctx), sexp_make_fixnum(off));
 }
 
@@ -102,11 +118,11 @@ static void bytecode_preserve (sexp ctx, sexp obj) {
 
 static void sexp_emit_word (sexp ctx, sexp_uint_t val)  {
   unsigned char *data;
+  sexp_context_align_pos(ctx);
   sexp_expand_bcode(ctx, sizeof(sexp));
   if (sexp_exceptionp(sexp_context_exception(ctx)))
     return;
   data = sexp_bytecode_data(sexp_context_bc(ctx));
-  sexp_context_align_pos(ctx);
   *((sexp_uint_t*)(&(data[sexp_unbox_fixnum(sexp_context_pos(ctx))]))) = val;
   sexp_inc_context_pos(ctx, sizeof(sexp));
 }
@@ -184,7 +200,7 @@ static void generate_seq (sexp ctx, sexp name, sexp loc, sexp lam, sexp app) {
       generate_drop_prev(ctx, sexp_car(head));
       sexp_inc_context_depth(ctx, -1);
     }
-  sexp_context_tailp(ctx) = tailp;
+  sexp_context_tailp(ctx) = (char)tailp;
   sexp_generate(ctx, name, loc, lam, sexp_car(head));
 }
 
@@ -193,12 +209,12 @@ static void generate_cnd (sexp ctx, sexp name, sexp loc, sexp lam, sexp cnd) {
   sexp_push_source(ctx, sexp_cnd_source(cnd));
   sexp_context_tailp(ctx) = 0;
   sexp_generate(ctx, name, loc, lam, sexp_cnd_test(cnd));
-  sexp_context_tailp(ctx) = tailp;
+  sexp_context_tailp(ctx) = (char)tailp;
   sexp_emit(ctx, SEXP_OP_JUMP_UNLESS);
   sexp_inc_context_depth(ctx, -1);
   label1 = sexp_context_make_label(ctx);
   sexp_generate(ctx, name, loc, lam, sexp_cnd_pass(cnd));
-  sexp_context_tailp(ctx) = tailp;
+  sexp_context_tailp(ctx) = (char)tailp;
   sexp_emit(ctx, SEXP_OP_JUMP);
   sexp_inc_context_depth(ctx, -1);
   label2 = sexp_context_make_label(ctx);
@@ -243,8 +259,13 @@ static void generate_ref (sexp ctx, sexp ref, int unboxp) {
       sexp_emit_push(ctx, sexp_ref_cell(ref));
   } else {
     lam = sexp_context_lambda(ctx);
-    generate_non_global_ref(ctx, sexp_ref_name(ref), sexp_ref_cell(ref),
-                            lam, sexp_lambda_fv(lam), unboxp);
+    if (!lam || !sexp_lambdap(lam)) {
+      sexp_warn(ctx, "variable out of phase: ", sexp_ref_name(ref));
+      sexp_emit_push(ctx, SEXP_VOID);
+    } else {
+      generate_non_global_ref(ctx, sexp_ref_name(ref), sexp_ref_cell(ref),
+                              lam, sexp_lambda_fv(lam), unboxp);
+    }
   }
 }
 
@@ -457,7 +478,7 @@ static void generate_general_app (sexp ctx, sexp app) {
   sexp_emit(ctx, (tailp ? SEXP_OP_TAIL_CALL : SEXP_OP_CALL));
   sexp_emit_word(ctx, (sexp_uint_t)sexp_make_fixnum(len));
 
-  sexp_context_tailp(ctx) = tailp;
+  sexp_context_tailp(ctx) = (char)tailp;
   sexp_inc_context_depth(ctx, -len);
   sexp_gc_release1(ctx);
 }
@@ -874,7 +895,7 @@ static int sexp_check_type(sexp ctx, sexp a, sexp b) {
   if (b == sexp_type_by_index(ctx, SEXP_OBJECT))
     return 1;
   d = sexp_type_depth(b);
-  return (d < sexp_vector_length(v))
+  return (d < (int)sexp_vector_length(v))
     && sexp_vector_ref(v, sexp_make_fixnum(d)) == b;
 }
 
@@ -961,6 +982,21 @@ static void* sexp_thread_debug_event(sexp ctx) {
   }
 #else
 #define sexp_ensure_stack(n)
+#endif
+
+/* used only when no thread scheduler has been loaded */
+#if SEXP_USE_POLL_PORT
+int sexp_poll_port(sexp ctx, sexp port, int inputp) {
+  fd_set fds;
+  int fd = sexp_port_fileno(port);
+  if (fd < 0) {
+    usleep(SEXP_POLL_SLEEP_TIME);
+    return -1;
+  }
+  FD_ZERO(&fds);
+  FD_SET(fd, &fds);
+  return select(1, (inputp ? &fds : NULL), (inputp ? NULL : &fds), NULL, NULL);
+}
 #endif
 
 sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
@@ -1105,7 +1141,6 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     bc = sexp_procedure_code(self);
     cp = sexp_procedure_vars(self);
     ip = sexp_bytecode_data(bc) + sexp_unbox_fixnum(_ARG3);
-    i = sexp_unbox_fixnum(_ARG4);
     top -= 4;
     _ARG1 = tmp1;
     break;
@@ -1344,7 +1379,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     else if (! sexp_fixnump(_ARG2))
       sexp_raise("vector-ref: not an integer", sexp_list1(ctx, _ARG2));
     i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_vector_length(_ARG1)))
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(_ARG1)))
       sexp_raise("vector-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     _ARG2 = sexp_vector_ref(_ARG1, _ARG2);
     top--;
@@ -1357,7 +1392,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     else if (! sexp_fixnump(_ARG2))
       sexp_raise("vector-set!: not an integer", sexp_list1(ctx, _ARG2));
     i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_vector_length(_ARG1)))
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_vector_length(_ARG1)))
       sexp_raise("vector-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     sexp_vector_set(_ARG1, _ARG2, _ARG3);
     top-=3;
@@ -1373,18 +1408,18 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     if (! sexp_fixnump(_ARG2))
       sexp_raise("byte-vector-ref: not an integer", sexp_list1(ctx, _ARG2));
     i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_bytes_length(_ARG1)))
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(_ARG1)))
       sexp_raise("byte-vector-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     _ARG2 = sexp_bytes_ref(_ARG1, _ARG2);
     top--;
     break;
   case SEXP_OP_STRING_REF:
     if (! sexp_stringp(_ARG1))
-      sexp_raise("string-ref: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("string-ref: not an integer", sexp_list1(ctx, _ARG2));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_string_size(_ARG1)))
+      sexp_raise("string-cursor-ref: not a string", sexp_list1(ctx, _ARG1));
+    else if (! sexp_string_cursorp(_ARG2))
+      sexp_raise("string-cursor-ref: not a string-cursor", sexp_list1(ctx, _ARG2));
+    i = sexp_unbox_string_cursor(_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(_ARG1)))
       sexp_raise("string-ref: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     _ARG2 = sexp_string_cursor_ref(ctx, _ARG1, _ARG2);
     top--;
@@ -1401,7 +1436,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
                && sexp_unbox_fixnum(_ARG3)<0x100))
       sexp_raise("byte-vector-set!: not an octet", sexp_list1(ctx, _ARG3));
     i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_bytes_length(_ARG1)))
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_bytes_length(_ARG1)))
       sexp_raise("byte-vector-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     sexp_bytes_set(_ARG1, _ARG2, _ARG3);
     top-=3;
@@ -1409,16 +1444,16 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
 #if SEXP_USE_MUTABLE_STRINGS
   case SEXP_OP_STRING_SET:
     if (! sexp_stringp(_ARG1))
-      sexp_raise("string-set!: not a string", sexp_list1(ctx, _ARG1));
+      sexp_raise("string-cursor-set!: not a string", sexp_list1(ctx, _ARG1));
     else if (sexp_immutablep(_ARG1))
-      sexp_raise("string-set!: immutable string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("string-set!: not an integer", sexp_list1(ctx, _ARG2));
+      sexp_raise("string-cursor-set!: immutable string", sexp_list1(ctx, _ARG1));
+    else if (! sexp_string_cursorp(_ARG2))
+      sexp_raise("string-cursor-set!: not a string-cursor", sexp_list1(ctx, _ARG2));
     else if (! sexp_charp(_ARG3))
-      sexp_raise("string-set!: not a char", sexp_list1(ctx, _ARG3));
-    i = sexp_unbox_fixnum(_ARG2);
-    if ((i < 0) || (i >= sexp_string_size(_ARG1)))
-      sexp_raise("string-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
+      sexp_raise("string-cursor-set!: not a char", sexp_list1(ctx, _ARG3));
+    i = sexp_unbox_string_cursor(_ARG2);
+    if ((i < 0) || (i >= (sexp_sint_t)sexp_string_size(_ARG1)))
+      sexp_raise("string-cursor-set!: index out of range", sexp_list2(ctx, _ARG1, _ARG2));
     sexp_context_top(ctx) = top;
     sexp_string_set(ctx, _ARG1, _ARG2, _ARG3);
     top-=3;
@@ -1428,8 +1463,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   case SEXP_OP_STRING_CURSOR_NEXT:
     if (! sexp_stringp(_ARG1))
       sexp_raise("string-cursor-next: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("string-cursor-next: not an integer", sexp_list1(ctx, _ARG2));
+    else if (! sexp_string_cursorp(_ARG2))
+      sexp_raise("string-cursor-next: not a string-cursor", sexp_list1(ctx, _ARG2));
     _ARG2 = sexp_string_cursor_next(_ARG1, _ARG2);
     top--;
     sexp_check_exception();
@@ -1437,16 +1472,16 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
   case SEXP_OP_STRING_CURSOR_PREV:
     if (! sexp_stringp(_ARG1))
       sexp_raise("string-cursor-prev: not a string", sexp_list1(ctx, _ARG1));
-    else if (! sexp_fixnump(_ARG2))
-      sexp_raise("string-cursor-prev: not an integer", sexp_list1(ctx, _ARG2));
+    else if (! sexp_string_cursorp(_ARG2))
+      sexp_raise("string-cursor-prev: not a string-cursor", sexp_list1(ctx, _ARG2));
     _ARG2 = sexp_string_cursor_prev(_ARG1, _ARG2);
     top--;
     sexp_check_exception();
     break;
-  case SEXP_OP_STRING_SIZE:
+  case SEXP_OP_STRING_CURSOR_END:
     if (! sexp_stringp(_ARG1))
-      sexp_raise("string-size: not a string", sexp_list1(ctx, _ARG1));
-    _ARG1 = sexp_make_fixnum(sexp_string_size(_ARG1));
+      sexp_raise("string-cursor-end: not a string", sexp_list1(ctx, _ARG1));
+    _ARG1 = sexp_make_string_cursor(sexp_string_size(_ARG1));
     break;
 #endif
   case SEXP_OP_BYTES_LENGTH:
@@ -1542,7 +1577,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     if (! sexp_fixnump(_ARG3))
       sexp_raise("slotn-ref: not an integer", sexp_list1(ctx, _ARG3));
     if (sexp_vectorp(sexp_type_getters(_ARG1))) {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= sexp_vector_length(sexp_type_getters(_ARG1)))
+      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_getters(_ARG1)))
         sexp_raise("slotn-ref: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
       tmp1 = sexp_vector_ref(sexp_type_getters(_ARG1), _ARG3);
       if (sexp_opcodep(tmp1))
@@ -1571,7 +1606,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     if (! sexp_fixnump(_ARG3))
       sexp_raise("slotn-set!: not an integer", sexp_list1(ctx, _ARG3));
     if (sexp_vectorp(sexp_type_setters(_ARG1))) {
-      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= sexp_vector_length(sexp_type_setters(_ARG1)))
+      if (sexp_unbox_fixnum(_ARG3) < 0 || sexp_unbox_fixnum(_ARG3) >= (sexp_sint_t)sexp_vector_length(sexp_type_setters(_ARG1)))
         sexp_raise("slotn-set!: slot out of bounds", sexp_list2(ctx, _ARG3, sexp_make_fixnum(sexp_type_field_len_base(_ARG1))));
       tmp1 = sexp_vector_ref(sexp_type_setters(_ARG1), _ARG3);
       if (sexp_opcodep(tmp1))
@@ -1904,6 +1939,19 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     _ARG2 = sexp_make_boolean(_ARG1 == _ARG2);
     top--;
     break;
+  case SEXP_OP_SCP:
+    _ARG1 = sexp_make_boolean(sexp_string_cursorp(_ARG1));
+    break;
+  case SEXP_OP_SC_LT:
+    tmp1 = _ARG1, tmp2 = _ARG2;
+    sexp_context_top(ctx) = --top;
+    _ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 < (sexp_sint_t)tmp2);
+    break;
+  case SEXP_OP_SC_LE:
+    tmp1 = _ARG1, tmp2 = _ARG2;
+    sexp_context_top(ctx) = --top;
+    _ARG1 = sexp_make_boolean((sexp_sint_t)tmp1 <= (sexp_sint_t)tmp2);
+    break;
   case SEXP_OP_CHAR2INT:
     if (! sexp_charp(_ARG1))
       sexp_raise("char->integer: not a character", sexp_list1(ctx, _ARG1));
@@ -1949,8 +1997,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
         if (sexp_port_stream(_ARG2)) clearerr(sexp_port_stream(_ARG2));
         if (sexp_applicablep(sexp_global(ctx, SEXP_G_THREADS_BLOCKER)))
           sexp_apply2(ctx, sexp_global(ctx, SEXP_G_THREADS_BLOCKER), _ARG2, SEXP_FALSE);
-        else               /* no scheduler but output full, wait 5ms */
-          usleep(5*1000);
+        else
+          sexp_poll_output(ctx, _ARG2);
         fuel = 0;
         ip--;      /* try again */
         goto loop;
@@ -1976,7 +2024,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       _ARG2 = sexp_make_fixnum(sexp_bytes_length(tmp1));
     else if (! sexp_fixnump(_ARG2))
       sexp_raise("write-string: not an integer", sexp_list1(ctx, _ARG2));
-    if (sexp_unbox_fixnum(_ARG2) < 0 || sexp_unbox_fixnum(_ARG2) > sexp_bytes_length(tmp1))
+    if (sexp_unbox_fixnum(_ARG2) < 0 || sexp_unbox_fixnum(_ARG2) > (sexp_sint_t)sexp_bytes_length(tmp1))
       sexp_raise("write-string: not a valid string count", sexp_list2(ctx, tmp1, _ARG2));
     if (! sexp_oportp(_ARG3))
       sexp_raise("write-string: not an output-port", sexp_list1(ctx, _ARG3));
@@ -1999,8 +2047,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       /* TODO: the wait seems necessary on OS X to stop a print loop to ptys */
       if (sexp_applicablep(sexp_global(ctx, SEXP_G_THREADS_BLOCKER)))
         sexp_apply2(ctx, sexp_global(ctx, SEXP_G_THREADS_BLOCKER), _ARG3, SEXP_FALSE);
-      else               /* no scheduler but output full, wait 5ms */
-        usleep(5*1000);
+      else
+        sexp_poll_output(ctx, _ARG3);
       fuel = 0;
       ip--;      /* try again */
       goto loop;
@@ -2034,6 +2082,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
         /* TODO: block and unblock */
         if (sexp_applicablep(sexp_global(ctx, SEXP_G_THREADS_BLOCKER)))
           sexp_apply2(ctx, sexp_global(ctx, SEXP_G_THREADS_BLOCKER), _ARG1, SEXP_FALSE);
+        else
+          sexp_poll_input(ctx, _ARG1);
         fuel = 0;
         ip--;      /* try again */
       } else
@@ -2063,6 +2113,8 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
         if (sexp_port_stream(_ARG1)) clearerr(sexp_port_stream(_ARG1));
         if (sexp_applicablep(sexp_global(ctx, SEXP_G_THREADS_BLOCKER)))
           sexp_apply2(ctx, sexp_global(ctx, SEXP_G_THREADS_BLOCKER), _ARG1, SEXP_FALSE);
+        else
+          sexp_poll_input(ctx, _ARG1);
         fuel = 0;
         ip--;      /* try again */
       } else

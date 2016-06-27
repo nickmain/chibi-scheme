@@ -1,4 +1,14 @@
 
+(define-syntax let-syntax
+  (syntax-rules ()
+    ((let-syntax . x)
+     (let () (let-syntax/splicing . x)))))
+
+(define-syntax letrec-syntax
+  (syntax-rules ()
+    ((letrec-syntax . x)
+     (let () (letrec-syntax/splicing . x)))))
+
 (define-syntax when
   (syntax-rules ()
     ((when test . body)
@@ -22,10 +32,10 @@
                  (lambda ()
                    (let ((var condition))      ; clauses may SET! var
                      (guard-aux (handler-k (lambda ()
-                                             (raise-continuable condition)))
+                                             (raise condition)))
                                 clause ...))))))))
           (lambda ()
-            (let ((res (begin e1 e2 ...)))
+            (let ((res (let () e1 e2 ...)))
               (guard-k (lambda () res)))))))))))
 
 (define-syntax guard-aux

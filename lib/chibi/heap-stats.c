@@ -49,12 +49,12 @@ static void sexp_print_simple (sexp ctx, sexp x, sexp out, int depth) {
     sexp_write_char(ctx, ')', out);
   } else if (sexp_vectorp(x)) {
     sexp_write_string(ctx, "#(", out);
-    for (i=0; i<SEXP_HEAP_VECTOR_DEPTH && i<sexp_vector_length(x); i++) {
+    for (i=0; i<SEXP_HEAP_VECTOR_DEPTH && i<(int)sexp_vector_length(x); i++) {
       if (i>0)
         sexp_write_char(ctx, ' ', out);
       sexp_print_simple(ctx, sexp_vector_ref(x, i), out, depth-1);
     }
-    if (i<sexp_vector_length(x))
+    if (i<(int)sexp_vector_length(x))
       sexp_write_string(ctx, " ...", out);
     sexp_write_char(ctx, ')', out);
   } else {
@@ -67,12 +67,13 @@ static void sexp_print_simple (sexp ctx, sexp x, sexp out, int depth) {
 
 static sexp sexp_heap_walk (sexp ctx, int depth, int printp) {
   size_t freed;
-  sexp_uint_t stats[256], hi_type=0, i;
+  sexp_uint_t stats[256], sizes[256], hi_type=0, size;
+  sexp_sint_t i;
   sexp_heap h = sexp_context_heap(ctx);
   sexp p, out=SEXP_FALSE;
   sexp_free_list q, r;
   char *end;
-  sexp_gc_var3(res, tmp, name);
+  sexp_gc_var4(stats_res, res, tmp, name);
 
   if (printp)
     out = sexp_parameter_ref(ctx,
@@ -85,7 +86,7 @@ static sexp sexp_heap_walk (sexp ctx, int depth, int printp) {
   sexp_gc(ctx, &freed);
 
   /* initialize stats */
-  for (i=0; i<256; i++) stats[i]=0;
+  for (i=0; i<256; i++) { stats[i]=0; sizes[i]=0; }
 
   /* loop over each heap chunk */
   for ( ; h; h=h->next) {
@@ -105,28 +106,43 @@ static sexp sexp_heap_walk (sexp ctx, int depth, int printp) {
         sexp_print_simple(ctx, p, out, depth);
         sexp_write_char(ctx, '\n', out);
       }
-      stats[sexp_pointer_tag(p)]++;
+      stats[sexp_pointer_tag(p) > 255 ? 255 : sexp_pointer_tag(p)]++;
+      size = sexp_heap_align(sexp_allocated_bytes(ctx, p));
+      sizes[sexp_heap_chunks(size) > 255 ? 255 : sexp_heap_chunks(size)]++;
       if (sexp_pointer_tag(p) > hi_type)
         hi_type = sexp_pointer_tag(p);
-      p = (sexp) (((char*)p) + sexp_heap_align(sexp_allocated_bytes(ctx, p)));
+      p = (sexp) (((char*)p) + size);
     }
   }
 
   /* build and return results */
-  sexp_gc_preserve3(ctx, res, tmp, name);
-  res = SEXP_NULL;
+  sexp_gc_preserve4(ctx, stats_res, res, tmp, name);
+  stats_res = SEXP_NULL;
   for (i=hi_type; i>0; i--)
     if (stats[i]) {
       name = sexp_string_to_symbol(ctx, sexp_type_name_by_index(ctx, i));
       tmp = sexp_cons(ctx, name, sexp_make_fixnum(stats[i]));
+      stats_res = sexp_cons(ctx, tmp, stats_res);
+    }
+  res = SEXP_NULL;
+  for (i=255; i>=0; i--)
+    if (sizes[i]) {
+      tmp = sexp_cons(ctx, sexp_make_fixnum(i), sexp_make_fixnum(sizes[i]));
       res = sexp_cons(ctx, tmp, res);
     }
-  sexp_gc_release3(ctx);
+  res = sexp_cons(ctx, stats_res, res);
+  sexp_gc_release4(ctx);
   return res;
 }
 
 static sexp sexp_heap_stats (sexp ctx, sexp self, sexp_sint_t n) {
-  return sexp_heap_walk(ctx, 0, 0);
+  sexp res = sexp_heap_walk(ctx, 0, 0);
+  return sexp_pairp(res) ? sexp_car(res) : res;
+}
+
+static sexp sexp_heap_sizes (sexp ctx, sexp self, sexp_sint_t n) {
+  sexp res = sexp_heap_walk(ctx, 0, 0);
+  return sexp_pairp(res) ? sexp_cdr(res) : res;
 }
 
 static sexp sexp_heap_dump (sexp ctx, sexp self, sexp_sint_t n, sexp depth) {
@@ -135,13 +151,53 @@ static sexp sexp_heap_dump (sexp ctx, sexp self, sexp_sint_t n, sexp depth) {
   return sexp_heap_walk(ctx, sexp_unbox_fixnum(depth), 1);
 }
 
+static sexp sexp_free_sizes (sexp ctx, sexp self, sexp_sint_t n) {
+  size_t freed;
+  sexp_uint_t sizes[512];
+  sexp_sint_t i;
+  sexp_heap h = sexp_context_heap(ctx);
+  sexp_free_list q;
+  sexp_gc_var2(res, tmp);
+
+  /* run gc once to remove unused variables */
+  sexp_gc(ctx, &freed);
+
+  /* initialize stats */
+  for (i=0; i<512; i++)
+    sizes[i]=0;
+
+  /* loop over each free block */
+  for ( ; h; h=h->next)
+    for (q=h->free_list; q; q=q->next)
+      sizes[sexp_heap_chunks(q->size) > 511 ? 511 : sexp_heap_chunks(q->size)]++;
+
+  /* build and return results */
+  sexp_gc_preserve2(ctx, res, tmp);
+  res = SEXP_NULL;
+  for (i=511; i>=0; i--)
+    if (sizes[i]) {
+      tmp = sexp_cons(ctx, sexp_make_fixnum(i), sexp_make_fixnum(sizes[i]));
+      res = sexp_cons(ctx, tmp, res);
+    }
+  sexp_gc_release2(ctx);
+  return res;
+}
+
 #else
 
-static sexp sexp_heap_stats (sexp ctx, sexp self, sexp_sint_t n) {
+sexp sexp_heap_stats (sexp ctx, sexp self, sexp_sint_t n) {
   return SEXP_NULL;
 }
 
-static sexp sexp_heap_dump (sexp ctx, sexp self, sexp_sint_t n, sexp depth) {
+sexp sexp_heap_sizes (sexp ctx, sexp self, sexp_sint_t n) {
+  return SEXP_NULL;
+}
+
+sexp sexp_heap_dump (sexp ctx, sexp self, sexp_sint_t n, sexp depth) {
+  return SEXP_NULL;
+}
+
+sexp sexp_free_sizes (sexp ctx, sexp self, sexp_sint_t n) {
   return SEXP_NULL;
 }
 
@@ -152,6 +208,8 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
         && sexp_abi_compatible(ctx, abi, SEXP_ABI_IDENTIFIER)))
     return SEXP_ABI_ERROR;
   sexp_define_foreign(ctx, env, "heap-stats", 0, sexp_heap_stats);
+  sexp_define_foreign(ctx, env, "heap-sizes", 0, sexp_heap_sizes);
   sexp_define_foreign_opt(ctx, env, "heap-dump", 1, sexp_heap_dump, SEXP_ONE);
+  sexp_define_foreign(ctx, env, "free-sizes", 0, sexp_free_sizes);
   return SEXP_VOID;
 }

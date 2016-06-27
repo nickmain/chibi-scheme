@@ -33,8 +33,11 @@
                 (let ((msg
                        (string-append
                         "Implementation " (symbol->string (car spec))
-                        " is an unsupported version, " version ", but"
-                        " at least " (fourth spec) " is required.")))
+                        (if (string? version)
+                            (string-append " is an unsupported version, "
+                                           version)
+                            " is an unknown version")
+                        ", but at least " (fourth spec) " is required.")))
                   (cond
                    (confirm?
                     (yes-or-no? cfg msg " Install anyway?"))
@@ -263,7 +266,7 @@
                     (cdar ls))))
           (if (pair? res)
               (lp (cdr ls) deps `((cond-expand ,@res) ,@cond-deps))
-              (lp deps cond-deps))))
+              (lp (cdr ls) deps cond-deps))))
        (else
         (append (if (pair? deps) (list (cons depends (reverse deps))) '())
                 (if (pair? cond-deps) (reverse cond-deps) '())))))))
@@ -394,16 +397,23 @@
 (define (package-license cfg)
   (conf-get cfg '(command package license)))
 
-(define (package-output-version cfg)
+(define (read-version-file cfg file lib-files)
+  (let ((file (or (find file-exists?
+                        (map (lambda (f) (make-path (path-directory f) file))
+                             lib-files))
+                  file)))
+    (call-with-input-file file read-line)))
+
+(define (package-output-version cfg lib-files)
   (cond ((conf-get cfg '(command package version)))
         ((conf-get cfg '(command upload version)))
         ((conf-get cfg '(command package version-file))
-         => (lambda (file) (call-with-input-file file read-line)))
+         => (lambda (file) (read-version-file cfg file lib-files)))
         ((conf-get cfg '(command upload version-file))
-         => (lambda (file) (call-with-input-file file read-line)))
+         => (lambda (file) (read-version-file cfg file lib-files)))
         (else #f)))
 
-(define (package-output-path cfg package-spec)
+(define (package-output-path cfg package-spec libs)
   (or (conf-get cfg '(command package output))
       (make-path
        (conf-get cfg '(command package output-dir) ".")
@@ -412,7 +422,7 @@
         package-spec
         (filter (lambda (x) (and (pair? x) (memq (car x) '(library program))))
                 package-spec)
-        (package-output-version cfg)))))
+        (package-output-version cfg libs)))))
 
 (define (replace-library-pattern pat base-lib)
   (case (and (pair? pat) (car pat))
@@ -479,7 +489,7 @@
          (name (conf-get cfg '(command package name)))
          (authors (conf-get-list cfg '(command package authors)))
          (test (package-test cfg))
-         (version (package-output-version cfg))
+         (version (package-output-version cfg libs))
          (maintainers (conf-get-list cfg '(command package maintainers)))
          (license (package-license cfg)))
     (let lp ((ls (map (lambda (x) (list x #f)) libs))
@@ -582,7 +592,14 @@
                     data-files))
                (tar-files
                 (reverse
-                 (append (if test (list test)) docs tar-data-files files))))
+                 (append
+                  (cond
+                   ((pair? test) (list test))
+                   (test
+                    `((rename ,test
+                              ,(path-strip-leading-parents test))))
+                   (else '()))
+                  docs tar-data-files files))))
           (cons `(package
                   ,@(reverse res)
                   ,@(if (pair? data-files) `((data-files ,@pkg-data-files)) '())
@@ -613,7 +630,7 @@
 
 (define (command/package cfg spec . libs)
   (let* ((spec+files (package-spec+files cfg spec libs))
-         (output (package-output-path cfg (car spec+files)))
+         (output (package-output-path cfg (car spec+files) libs))
          (tarball (create-package (car spec+files) (cdr spec+files) output)))
     (check-overwrite cfg output package-file? "package")
     (let ((out (open-binary-output-file output)))
@@ -746,9 +763,41 @@
       (make-path (or (conf-get cfg 'host) "http://snow-fort.org")
                  path)))
 
+;; a subset of http-post functionality that can shell out to curl
+;; depending on config
+(define (snow-post cfg uri params)
+  (cond
+   ((conf-get cfg 'use-curl?)
+    (let ((cmd `(curl --silent
+                      ,@(append-map
+                         (lambda (x)
+                           (cond
+                            ((and (pair? (cdr x)) (assq 'value (cdr x)))
+                             => (lambda (y)
+                                  `("-F" ,(string-append
+                                           (display-to-string (car x)) "="
+                                           (display-to-string (cdr y))))))
+                            ((and (pair? (cdr x)) (assq 'file (cdr x)))
+                             => (lambda (y)
+                                  `("-F" ,(string-append
+                                           (display-to-string (car x)) "=@"
+                                           (display-to-string (cdr y))))))
+                            (else
+                             `("-F" ,(string-append
+                                      (display-to-string (car x)) "="
+                                      (display-to-string (cdr x)))))))
+                         params)
+                      ,(uri->string uri))))
+      (open-input-bytevector (process->bytevector cmd))))
+   ((not (conf-get cfg 'non-blocking-io))
+    (http-post uri params '((blocking . #t))))
+   (else
+    (http-post uri params))))
+
 (define (remote-command cfg name path params)
   (let ((uri (remote-uri cfg name path)))
-    (sxml-display-as-text (read (http-post uri (cons '(fmt . "sexp") params))))
+    (sxml-display-as-text
+     (read (snow-post cfg uri (cons '(fmt . "sexp") params))))
     (newline)))
 
 (define (command/reg-key cfg spec)
@@ -909,7 +958,7 @@
     (if (any package-file? (cdr o))
         (non-homogeneous))
     (let* ((spec+files (package-spec+files cfg spec o))
-           (package-file (package-output-path cfg (car spec+files)))
+           (package-file (package-output-path cfg (car spec+files) o))
            (package (create-package (car spec+files)
                                     (cdr spec+files)
                                     package-file)))
@@ -975,11 +1024,13 @@
   (define (library-score lib)
     (+ (* 10 (count-in-sexp (library-name lib) keywords))
        (count-in-sexp lib keywords)
-       (let ((use-for (assoc-get lib 'use-for)))
-         (case (if (pair? use-for) (car use-for) use-for)
-           ((test) 0)
-           ((build) 10)
-           (else 100)))))
+       (let ((use-for (assq 'use-for (cdr lib))))
+         (apply
+          max
+          0
+          (map
+           (lambda (x) (case x ((test) 0) ((build) 10) (else 100)))
+           (if (pair? use-for) (cdr use-for) (list use-for)))))))
   (append-map
    (lambda (x)
      (cond
@@ -1125,6 +1176,12 @@
         (call-with-input-file (repository-local-path cfg repo-uri)
           read))))
 
+(define (get-repository-list cfg)
+  (let ((ls (conf-get-list cfg 'repository-uri)))
+    (if (pair? ls)
+        ls
+        (list (remote-uri cfg 'default-repository "/s/repo.scm")))))
+
 ;; returns all repos merged as a sexp, updated as needed
 ;; not to be confused with the current-repo util in (chibi snow fort)
 ;; which returns the single host
@@ -1147,7 +1204,7 @@
                     (eq? 'url (car x))))
              ls)))
   (let lp ((ls (map (lambda (x) (make-loc x 1.0 0))
-                    (conf-get-list cfg 'repository-uri)))
+                    (get-repository-list cfg)))
            (seen '())
            (res '()))
     (cond
@@ -1231,14 +1288,18 @@
            (cons share-dir (delete share-dir dirs))
            dirs)))
     ((chicken)
-     (let ((dir (process->string '(csi -p "(repository-path)"))))
+     (let ((dir (string-trim
+                 (process->string '(csi -p "(repository-path)"))
+                 char-whitespace?)))
        (list
         (if (file-exists? dir)  ; repository-path should always exist
             dir
             (make-path (or (conf-get cfg 'install-prefix)) "lib" impl 7)))))
     ((gauche)
      (list
-      (let ((dir (process->string '(gauche-config "--sitelibdir"))))
+      (let ((dir (string-trim
+                  (process->string '(gauche-config "--sitelibdir"))
+                  char-whitespace?)))
         (or (and (string? dir) (> (string-length dir) 0)
                  (eqv? #\/ (string-ref dir 0))
                  dir)
@@ -1256,9 +1317,11 @@
     ((larceny)
      (list
       (make-path
-       (process->string
-        '(larceny -quiet -nobanner -- -e
-                  "(begin (display (getenv \"LARCENY_ROOT\")) (exit))"))
+       (string-trim
+        (process->string
+         '(larceny -quiet -nobanner -- -e
+                   "(begin (display (getenv \"LARCENY_ROOT\")) (exit))"))
+        char-whitespace?)
        "lib/Snow")))
     (else
      (list (make-path (or (conf-get cfg 'install-prefix) "/usr/local")
@@ -1419,23 +1482,26 @@
 
 (define (installed-libraries impl cfg)
   (delete-duplicates
-   (directory-fold-tree
-    (get-install-source-dir impl cfg)
-    #f #f
-    (lambda (file acc)
-      (cond
-       ((and (equal? "meta" (path-extension file))
-             (guard (exn (else #f))
-               (let ((pkg (call-with-input-file file read)))
-                 (and (package? pkg) pkg))))
-        => (lambda (pkg)
-             (append
-              (map
-               (lambda (lib) (cons (library-name lib) pkg))
-               (package-libraries pkg))
-              acc)))
-       (else acc)))
-    '())
+   (append-map
+    (lambda (dir)
+      (directory-fold-tree
+       dir
+       #f #f
+       (lambda (file acc)
+         (cond
+          ((and (equal? "meta" (path-extension file))
+                (guard (exn (else #f))
+                  (let ((pkg (call-with-input-file file read)))
+                    (and (package? pkg) pkg))))
+           => (lambda (pkg)
+                (append
+                 (map
+                  (lambda (lib) (cons (library-name lib) pkg))
+                  (package-libraries pkg))
+                 acc)))
+          (else acc)))
+       '()))
+    (get-install-search-dirs impl cfg))
    (lambda (a b) (equal? (car a) (car b)))))
 
 (define r7rs-small-libraries
@@ -1553,9 +1619,10 @@
                   (lp dir))))))))
 
 (define (install-file cfg source dest)
-  (if (install-with-sudo? cfg dest)
-      (system "sudo" "cp" source dest)
-      (system "cp" source dest)))
+  (if (not (equal? source dest))
+      (if (install-with-sudo? cfg dest)
+          (system "sudo" "cp" source dest)
+          (system "cp" source dest))))
 
 (define (install-sexp-file cfg obj dest)
   (if (install-with-sudo? cfg dest)
@@ -1563,7 +1630,8 @@
         (lambda (tmp-path out preserve)
           (write-simple-pretty obj out)
           (close-output-port out)
-          (system "sudo" "cp" tmp-path dest)))
+          (system "sudo" "cp" tmp-path dest)
+          (system "sudo" "chmod" "644" dest)))
       (call-with-output-file dest
         (lambda (out) (write-simple-pretty obj out)))))
 
@@ -1580,6 +1648,13 @@
    (else
     (create-directory* dir))))
 
+(define (should-install-library? impl cfg lib)
+  (let ((use-for (assq 'use-for (cdr lib))))
+    (or (not (and (pair? use-for)
+                  (not (or (memq 'build use-for) (memq 'final use-for)))))
+        (conf-get cfg '(command install install-tests?))
+        (conf-get cfg '(command upgrade install-tests?)))))
+
 (define (install-package-meta-info impl cfg pkg)
   (let* ((meta-file (get-package-meta-file cfg pkg))
          (install-dir (get-install-source-dir impl cfg))
@@ -1591,7 +1666,8 @@
       (for-each
        (lambda (lib)
          (let ((lib-name (library-name lib)))
-           (if (not (equal? pkg-name (take lib-name (length pkg-name))))
+           (if (and (not (equal? pkg-name (take lib-name (length pkg-name))))
+                    (should-install-library? impl cfg lib))
                (let* ((lib-meta (make-path install-dir
                                            (get-library-meta-file cfg lib)))
                       (rel-path
@@ -1609,7 +1685,8 @@
           (string-append (library->path cfg library) "." ext))
          (include-files
           (library-include-files impl cfg (make-path dir library-file)))
-         (install-dir (get-install-source-dir impl cfg)))
+         (install-dir (get-install-source-dir impl cfg))
+         (install-lib-dir (get-install-library-dir impl cfg)))
     ;; install the library file
     (let ((path (make-path install-dir dest-library-file)))
       (install-directory cfg (path-directory path))
@@ -1617,13 +1694,25 @@
       ;; install any includes
       (cons
        path
-       (map
-        (lambda (x)
-          (let ((dest-file (make-path install-dir (path-relative x dir))))
-            (install-directory cfg (path-directory dest-file))
-            (install-file cfg x dest-file)
-            dest-file))
-        include-files)))))
+       (append
+        (map
+         (lambda (x)
+           (let ((dest-file (make-path install-dir (path-relative x dir))))
+             (install-directory cfg (path-directory dest-file))
+             (install-file cfg x dest-file)
+             dest-file))
+         include-files)
+        (map
+         (lambda (x)
+           (let* ((so-file (string-append x (cond-expand (macosx ".dylib")
+                                                         (else ".so"))))
+                  (dest-file (make-path install-lib-dir
+                                        (path-relative so-file dir))))
+             (install-directory cfg (path-directory dest-file))
+             (install-file cfg so-file dest-file)
+             dest-file))
+         (library-shared-include-files
+          impl cfg (make-path dir library-file))))))))
 
 (define (chicken-installer impl cfg library dir)
   (let* ((library-file (get-library-file cfg library))
@@ -1654,10 +1743,11 @@
     (else 'default)))
 
 (define (install-library impl cfg library dir)
-  (let ((installer
-         (lookup-installer (or (conf-get cfg 'installer)
-                               (installer-for-implementation impl cfg)))))
-    (installer impl cfg library dir)))
+  (if (should-install-library? impl cfg library)
+      (let ((installer
+             (lookup-installer (or (conf-get cfg 'installer)
+                                   (installer-for-implementation impl cfg)))))
+        (installer impl cfg library dir))))
 
 ;; The default builder just renames files per implementation.
 ;; Returns a new library object with any renames.
@@ -1740,7 +1830,9 @@
          (cc (string-split (or (conf-get cfg 'cc)
                                (get-environment-variable "CC")
                                "cc")))
-         (cflags (string-split (or (get-environment-variable "CFLAGS") ""))))
+         (cflags (string-split (or (conf-get cfg 'cflags)
+                                   (get-environment-variable "CFLAGS")
+                                   ""))))
     (let lp ((ls shared-includes))
       (if (null? ls)
           library
@@ -1751,21 +1843,36 @@
                                                            (else ".so"))))
                  (so-flags (cond-expand (macosx '("-dynamiclib" "-Oz"))
                                         (else '("-fPIC" "-shared" "-Os"))))
-                 (cc-cmd (append cc cflags so-flags
-                                 (if local-test? '("-Iinclude" "-L.") '())
-                                 `("-o" ,so-file ,c-file "-lchibi-scheme"))))
-            (and (or (file-exists? c-file)
-                     (and (file-exists? stub-file)
-                          (or (and (system? (append chibi-ffi (list stub-file)))
-                                   (file-exists? c-file))
-                              (yes-or-no? cfg "couldn't generate c from stub: "
-                                          stub-file " - install anyway?")))
-                     (yes-or-no? cfg "can't find ffi stub or c source for: "
-                                 base " - install anyway?"))
-                 (or (system? cc-cmd)
-                     (yes-or-no? cfg "couldn't compile chibi ffi c code: "
-                                 c-file " - install anyway?"))
-                 (lp (cdr ls))))))))
+                 (lib-flags
+                  (map (lambda (lib) (string-append "-l" lib))
+                       (library-foreign-dependencies impl cfg library)))
+                 (ffi-cmd
+                  `(,@chibi-ffi
+                    "-c" "-cc" ,(car cc)
+                    "-f" ,(string-join cflags " ")
+                    "-f" ,(string-join lib-flags " ")
+                    ,@(if local-test? '("-f" "-Iinclude -L.") '())
+                    ,@(if (pair? (cdr cc))
+                          (list "-f" (string-join (cdr cc) " "))
+                          '())
+                    ,stub-file))
+                 (cc-cmd
+                  `(,@cc ,@cflags ,@so-flags
+                         ,@(if local-test? '("-Iinclude" "-L.") '())
+                         "-o" ,so-file ,c-file "-lchibi-scheme"
+                         ,@lib-flags)))
+            (when (or (and (file-exists? c-file)
+                           (or (system? cc-cmd)
+                               (yes-or-no?
+                                cfg "couldn't compile chibi ffi c code: "
+                                c-file " - install anyway?")))
+                      (and (file-exists? stub-file)
+                           (or (system? ffi-cmd)
+                               (yes-or-no? cfg "couldn't compile stub: "
+                                           stub-file " - install anyway?")))
+                      (yes-or-no? cfg "can't find ffi stub or c source for: "
+                                  base " - install anyway?"))
+              (lp (cdr ls))))))))
 
 (define (chicken-builder impl cfg library dir)
   (let* ((library-file (make-path dir (get-library-file cfg library)))
@@ -1902,7 +2009,10 @@
 (define (package-maybe-signature-mismatches repo impl cfg pkg raw)
   (cond
    ((conf-get cfg 'ignore-signature? #t) #f)
-   ((not (assq 'signature (cdr pkg)))
+   ((not (cond
+          ((assq 'signature (cdr pkg))
+           => (lambda (x) (assoc-get (cdr x) 'rsa)))
+          (else #f)))
     (and (conf-get cfg 'require-signature?)
          (not (yes-or-no? cfg "Package signature missing.\nProceed anyway?"))
          '(package-signature-missing)))
@@ -1951,12 +2061,14 @@
                          '()))
                     (installed-files
                      (append data-files lib-files prog-files)))
-               (install-package-meta-info
-                impl cfg
-                `(,@(remove (lambda (x)
-                              (and (pair? x) (eq? 'installed-files (car x))))
-                            pkg)
-                  (installed-files ,@installed-files))))
+               (if (pair? installed-files)
+                   (install-package-meta-info
+                    impl cfg
+                    `(,@(remove (lambda (x)
+                                  (and (pair? x)
+                                       (eq? 'installed-files (car x))))
+                                pkg)
+                      (installed-files ,@installed-files)))))
              (preserve))))))))
 
 (define (install-package-from-file repo impl cfg file)
@@ -2007,7 +2119,9 @@
 ;; Choose packages for the corresponding libraries, and recursively
 ;; select uninstalled packages.
 (define (expand-package-dependencies repo impl cfg lib-names)
-  (let ((current (installed-libraries impl cfg)))
+  (let ((current (installed-libraries impl cfg))
+        (auto-upgrade-dependencies?
+         (conf-get cfg '(command install auto-upgrade-dependencies?))))
     (let lp ((ls lib-names) (res '()) (ignored '()))
       (cond
        ((null? ls) res)
@@ -2025,8 +2139,10 @@
                 (filter
                  (lambda (pkg)
                    (or (not current-version)
-                       (version>? (package-version pkg)
-                                  current-version)))
+                       (and (or auto-upgrade-dependencies?
+                                (member (car ls) lib-names))
+                            (version>? (package-version pkg)
+                                       current-version))))
                  providers)))
           (cond
            ((member (car ls) ignored)
@@ -2103,7 +2219,10 @@
       (let* ((repo (current-repositories cfg))
              (impls (conf-selected-implementations cfg))
              (impl-cfgs (map (lambda (impl)
-                               (conf-for-implementation cfg impl))
+                               (conf-extend
+                                (conf-for-implementation cfg impl)
+                                '((command install auto-upgrade-dependencies?)
+                                  . #t)))
                              impls)))
         (for-each
          (lambda (impl cfg)

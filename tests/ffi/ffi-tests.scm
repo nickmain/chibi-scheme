@@ -2,6 +2,15 @@
 (import (chibi) (chibi ast) (chibi match)
         (chibi process) (chibi filesystem) (chibi test))
 
+(define generated-shared-objects '())
+
+(define (trash-shared-object! file)
+  (set! generated-shared-objects (cons file generated-shared-objects)))
+
+(define (cleanup-shared-objects!)
+  (for-each (lambda (file) (protect (exn (else #f)) (delete-file file)))
+            generated-shared-objects))
+
 (test-begin "ffi")
 
 (define-syntax test-ffi
@@ -34,7 +43,7 @@
               ((= orig-failures (test-failure-count))
                (delete-file stub-file)
                (delete-file c-file)))
-             (delete-file lib-file)))
+             (trash-shared-object! lib-file)))
           (else
            (test-assert (string-append "couldn't compile " name)
              #f))))))))
@@ -219,6 +228,13 @@ typedef struct {
   Color color;
 } ColoredCircle;
 
+struct Point make_point_struct(double x, double y) {
+  struct Point res;
+  res.x = x;
+  res.y = y;
+  return res;
+}
+
 void set_color(short r, short g, short b, Color* res) {
   res->r = r;
   res->g = g;
@@ -255,6 +271,7 @@ double circle_area2(struct Circle circ) {
      constructor: (make-point x y)
      (double x point-x point-x-set!)
      (double y point-y point-y-set!))
+   (define-c (struct Point) make-point-struct (double double))
    (define-c-struct Rectangle
      predicate: rect?
      constructor: (make-rect top_left bottom_right)
@@ -267,8 +284,7 @@ double circle_area2(struct Circle circ) {
      ((struct Point) center circle-center)
      (double radius circle-radius))
    (define-c double circle_area1 (Circle))
-   ;; TODO: struct means no pointer
-   ;;(define-c double circle_area2 ((struct Circle)))
+   (define-c double circle_area2 ((struct Circle)))
    (define-c-type Color predicate: color?)
    (define-c void set_color (short short short (result pointer Color)))
    (define-c Color make_color (short short short))
@@ -279,6 +295,8 @@ double circle_area2(struct Circle circ) {
  (test 1. (point-x (make-point 1. 2.)))
  (test 2. (point-y (make-point 1. 2.)))
  (test 3. (point-x (let ((pt (make-point 1. 2.))) (point-x-set! pt 3.) pt)))
+ (test 1. (point-x (make-point-struct 1. 2.)))
+ (test 2. (point-y (make-point-struct 1. 2.)))
  ;; need constructor argument checking
  ;;(test-error (rect? (make-rect 1 2)))
  ;; gc miss - we don't preserve the pointers
@@ -468,4 +486,5 @@ void complex_imag_set(struct VirtComplex* c, double y) {
 
 ;; TODO: virtual method accessors
 
+(cleanup-shared-objects!)
 (test-end)

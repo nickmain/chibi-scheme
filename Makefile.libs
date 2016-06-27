@@ -14,8 +14,9 @@ CD        ?= cd
 RM        ?= rm -f
 LS        ?= ls
 CP        ?= cp
-LN        ?= ln
+LN        ?= ln -sf
 INSTALL   ?= install
+INSTALL_EXE	?=	$(INSTALL)
 MKDIR     ?= $(INSTALL) -d
 RMDIR     ?= rmdir
 TAR       ?= tar
@@ -23,6 +24,7 @@ DIFF      ?= diff
 GREP      ?= grep
 FIND      ?= find
 SYMLINK   ?= ln -s
+LDCONFIG  ?= ldconfig
 
 PREFIX    ?= /usr/local
 BINDIR    ?= $(PREFIX)/bin
@@ -31,6 +33,7 @@ SOLIBDIR  ?= $(PREFIX)/lib
 INCDIR    ?= $(PREFIX)/include/chibi
 MODDIR    ?= $(PREFIX)/share/chibi
 BINMODDIR ?= $(PREFIX)/lib/chibi
+PKGCONFDIR ?= $(SOLIBDIR)/pkgconfig
 MANDIR    ?= $(PREFIX)/share/man/man1
 
 DESTDIR   ?=

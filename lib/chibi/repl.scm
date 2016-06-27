@@ -63,7 +63,7 @@
                (ls (cdr strings)))
         (if (or (null? ls) (zero? len))
             len
-            (lp (min len (string-mismatch prev (car ls)))
+            (lp (min len (string-cursor->index prev (string-mismatch prev (car ls))))
                 (car ls)
                 (cdr ls))))))
 
@@ -76,7 +76,9 @@
               (lambda (w)
                 (and (>= (string-length w) len)
                      (equal? word (substring w 0 len))))
-              (map symbol->string (all-exports (interaction-environment)))))
+              (map symbol->string
+                   (map identifier->symbol
+                        (all-exports (interaction-environment))))))
             (prefix-len (string-common-prefix-length candidates)))
        (if (> prefix-len len)
            (list (substring (car candidates) 0 prefix-len))
@@ -317,7 +319,13 @@
                            (repl-advise-exception exn (current-error-port))))
                   (for-each
                    (lambda (expr)
-                     (call-with-values (lambda () (eval expr (repl-env rp)))
+                     (call-with-values
+                         (lambda ()
+                           (if (or (identifier? expr)
+                                   (pair? expr)
+                                   (null? expr))
+                               (eval expr (repl-env rp))
+                               expr))
                        (lambda res-list
                          (cond
                           ((not (or (null? res-list)

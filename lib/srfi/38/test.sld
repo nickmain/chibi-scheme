@@ -3,8 +3,6 @@
   (import (chibi) (chibi test) (srfi 1) (srfi 38))
   (begin
     (define (run-tests)
-      (test-begin "srfi-38: shared read/write")
-
       (define (read-from-string str)
         (call-with-input-string str
           (lambda (in) (read/ss in))))
@@ -28,6 +26,8 @@
                  (value expr))
              (test str (write-to-string value #t))
              (test str (write-to-string (read-from-string str) #t))))))
+
+      (test-begin "srfi-38: shared read/write")
 
       (test-io "(1)" (list 1))
       (test-io "(1 2)" (list 1 2))
@@ -73,6 +73,8 @@
                  (vector-set! x 2 x)
                  x))
 
+      (test '+.! (read-from-string "+.!"))
+
       (test 255 (read-from-string "#xff"))
       (test 99 (read-from-string "#d99"))
       (test 63 (read-from-string "#o77"))
@@ -82,6 +84,13 @@
       (test 15 (read-from-string "#e#xf"))
       (test 15.0 (read-from-string "#i#xf"))
       (test (expt 10 100) (read-from-string "#e1e100"))
+
+      (test "A\n\nB\n" (read-from-string "\"A\\n\\
+                                            \\n\\
+                                            B\n\""))
+      (test "A\n\n" (read-from-string "\"A\\n\\
+                                         \\n\\
+                                         \""))
 
       (cond-expand
        (chicken

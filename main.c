@@ -7,6 +7,7 @@
 #endif
 
 #include "chibi/eval.h"
+#include "chibi/gc_heap.h"
 
 #define sexp_argv_symbol "command-line"
 
@@ -14,6 +15,8 @@
 #define sexp_import_suffix "))"
 #define sexp_environment_prefix "(environment '("
 #define sexp_environment_suffix "))"
+#define sexp_trace_prefix "(module-env (load-module '("
+#define sexp_trace_suffix ")))"
 #define sexp_default_environment "(environment '(scheme small))"
 #define sexp_advice_environment "(load-module '(chibi repl))"
 
@@ -67,131 +70,15 @@ void sexp_usage(int err) {
 void sexp_segfault_handler(int sig) {
   void *array[10];
   size_t size;
-  // get void*'s for all entries on the stack
+  /* get void*'s for all entries on the stack */
   size = backtrace(array, 10);
-  // print out all the frames to stderr
+  /* print out all the frames to stderr */
   fprintf(stderr, "Error: signal %d:\n", sig);
   backtrace_symbols_fd(array, size, STDERR_FILENO);
   exit(1);
 }
 #endif
 
-#if SEXP_USE_IMAGE_LOADING
-
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <unistd.h>
-#include <fcntl.h>
-
-#define SEXP_IMAGE_MAGIC "\a\achibi\n\0"
-#define SEXP_IMAGE_MAJOR_VERSION 1
-#define SEXP_IMAGE_MINOR_VERSION 1
-
-typedef struct sexp_image_header_t* sexp_image_header;
-struct sexp_image_header_t {
-  char magic[8];
-  short major, minor;
-  sexp_abi_identifier_t abi;
-  sexp_uint_t size;
-  sexp_heap base;
-  sexp context;
-};
-
-sexp sexp_gc (sexp ctx, size_t *sum_freed);
-void sexp_offset_heap_pointers (sexp_heap heap, sexp_heap from_heap, sexp* types, sexp flags);
-
-static sexp sexp_load_image (const char* file, sexp_uint_t heap_size, sexp_uint_t heap_max_size) {
-  sexp ctx, flags, *globals, *types;
-  int fd;
-  sexp_sint_t offset;
-  sexp_heap heap;
-  sexp_free_list q;
-  struct sexp_image_header_t header;
-  fd = open(file, O_RDONLY);
-  if (fd < 0) {
-    fprintf(stderr, "can't open image file: %s\n", file);
-    return NULL;
-  }
-  if (read(fd, &header, sizeof(header)) != sizeof(header))
-    return NULL;
-  if (memcmp(header.magic, SEXP_IMAGE_MAGIC, sizeof(header.magic)) != 0) {
-    fprintf(stderr, "invalid image file magic for %s: %s\n", file, header.magic);
-    return NULL;
-  } else if (header.major != SEXP_IMAGE_MAJOR_VERSION
-             || header.major < SEXP_IMAGE_MINOR_VERSION) {
-    fprintf(stderr, "unsupported image version: %d.%d\n",
-            header.major, header.minor);
-    return NULL;
-  } else if (!sexp_abi_compatible(NULL, header.abi, SEXP_ABI_IDENTIFIER)) {
-    fprintf(stderr, "unsupported ABI: %s (expected %s)\n",
-            header.abi, SEXP_ABI_IDENTIFIER);
-    return NULL;
-  }
-  if (heap_size < header.size) heap_size = header.size;
-  heap = (sexp_heap)malloc(sexp_heap_pad_size(heap_size));
-  if (!heap) {
-    fprintf(stderr, "couldn't malloc heap\n");
-    return NULL;
-  }
-  if (read(fd, heap, header.size) != header.size) {
-    fprintf(stderr, "error reading image\n");
-    return NULL;
-  }
-  offset = (sexp_sint_t)((char*)heap - (sexp_sint_t)header.base);
-  /* expand the last free chunk if necessary */
-  if (heap->size < heap_size) {
-    for (q=(sexp_free_list)(((char*)heap->free_list) + offset); q->next;
-         q=(sexp_free_list)(((char*)q->next) + offset))
-      ;
-    if ((char*)q + q->size >= (char*)heap->data + heap->size) {
-      /* last free chunk at end of heap */
-      q->size += heap_size - heap->size;
-    } else {
-      /* last free chunk in the middle of the heap */
-      q->next = (sexp_free_list)((char*)heap->data + heap->size);
-      q = (sexp_free_list)(((char*)q->next) + offset);
-      q->size = heap_size - heap->size;
-      q->next = NULL;
-    }
-    heap->size += (heap_size - heap->size);
-  }
-  ctx = (sexp)(((char*)header.context) + offset);
-  globals = sexp_vector_data((sexp)((char*)sexp_context_globals(ctx) + offset));
-  types = sexp_vector_data((sexp)((char*)(globals[SEXP_G_TYPES]) + offset));
-  flags = sexp_fx_add(SEXP_COPY_LOADP, SEXP_COPY_FREEP);
-  sexp_offset_heap_pointers(heap, header.base, types, flags);
-  close(fd);
-  return ctx;
-}
-
-static int sexp_save_image (sexp ctx, const char* path) {
-  sexp_heap heap;
-  FILE* file;
-  struct sexp_image_header_t header;
-  file = fopen(path, "w");
-  if (!file) {
-    fprintf(stderr, "couldn't open image file for writing: %s\n", path);
-    return 0;
-  }
-  heap = sexp_context_heap(ctx);
-  memcpy(&header.magic, SEXP_IMAGE_MAGIC, sizeof(header.magic));
-  memcpy(&header.abi, SEXP_ABI_IDENTIFIER, sizeof(header.abi));
-  header.major = SEXP_IMAGE_MAJOR_VERSION;
-  header.minor = SEXP_IMAGE_MINOR_VERSION;
-  header.size = heap->size;
-  header.base = heap;
-  header.context = ctx;
-  sexp_gc(ctx, NULL);
-  if (! (fwrite(&header, sizeof(header), 1, file) == 1
-         && fwrite(heap, heap->size, 1, file) == 1)) {
-    fprintf(stderr, "error writing image file\n");
-    return 0;
-  }
-  fclose(file);
-  return 1;
-}
-
-#endif
 
 #if SEXP_USE_GREEN_THREADS
 static void sexp_make_unblocking (sexp ctx, sexp port) {
@@ -289,11 +176,11 @@ static sexp_uint_t multiplier (char c) {
 #endif
 
 static char* make_import(const char* prefix, const char* mod, const char* suffix) {
-  int len = strlen(mod) + strlen(prefix) + strlen(suffix);
+  int preflen = strlen(prefix), len = preflen + strlen(mod) + strlen(suffix);
   char *p, *impmod = (char*) malloc(len+1);
   strcpy(impmod, prefix);
-  strcpy(impmod+strlen(prefix), mod);
-  strcpy(impmod+len-+strlen(suffix), suffix);
+  strcpy(impmod+preflen, mod[0] == '(' ? mod + 1 : mod);
+  strcpy(impmod+len-strlen(suffix)-(mod[0] == '(' ? 1 : 0),  suffix);
   impmod[len] = '\0';
   for (p=impmod; *p; p++)
     if (*p == '.') *p=' ';
@@ -337,25 +224,32 @@ static sexp check_exception (sexp ctx, sexp res) {
   return res;
 }
 
+static sexp sexp_add_import_binding (sexp ctx, sexp env) {
+  sexp_gc_var2(sym, tmp);
+  sexp_gc_preserve2(ctx, sym, tmp);
+  sym = sexp_intern(ctx, "repl-import", -1);
+  tmp = sexp_env_ref(ctx, sexp_meta_env(ctx), sym, SEXP_VOID);
+  sym = sexp_intern(ctx, "import", -1);
+  sexp_env_define(ctx, env, sym, tmp);
+  sexp_gc_release3(ctx);
+  return env;
+}
+
 static sexp sexp_load_standard_repl_env (sexp ctx, sexp env, sexp k, int bootp) {
-  sexp_gc_var3(e, sym, tmp);
-  sexp_gc_preserve3(ctx, e, sym, tmp);
+  sexp_gc_var1(e);
+  sexp_gc_preserve1(ctx, e);
   e = sexp_load_standard_env(ctx, env, k);
   if (!sexp_exceptionp(e)) {
 #if SEXP_USE_MODULES
-    if (!bootp) {
+    if (!bootp)
       e = sexp_eval_string(ctx, sexp_default_environment, -1, sexp_global(ctx, SEXP_G_META_ENV));
-      sym = sexp_intern(ctx, "repl-import", -1);
-      tmp = sexp_env_ref(ctx, sexp_meta_env(ctx), sym, SEXP_VOID);
-      sym = sexp_intern(ctx, "import", -1);
-      sexp_env_define(ctx, e, sym, tmp);
-    }
+    if (!sexp_exceptionp(e))
+      sexp_add_import_binding(ctx, e);
 #endif
-    if (!sexp_exceptionp(e)) {
+    if (!sexp_exceptionp(e))
       e = sexp_load_standard_params(ctx, e);
-    }
   }
-  sexp_gc_release3(ctx);
+  sexp_gc_release1(ctx);
   return e;
 }
 
@@ -393,7 +287,7 @@ static sexp sexp_resume_ctx = SEXP_FALSE;
 static sexp sexp_resume_proc = SEXP_FALSE;
 #endif
 
-void run_main (int argc, char **argv) {
+sexp run_main (int argc, char **argv) {
 #if SEXP_USE_MODULES
   char *impmod;
 #endif
@@ -402,7 +296,7 @@ void run_main (int argc, char **argv) {
   sexp_sint_t i, j, c, quit=0, print=0, init_loaded=0, mods_loaded=0,
     fold_case=SEXP_DEFAULT_FOLD_CASE_SYMS;
   sexp_uint_t heap_size=0, heap_max_size=SEXP_MAXIMUM_HEAP_SIZE;
-  sexp out=SEXP_FALSE, ctx=NULL;
+  sexp out=SEXP_FALSE, ctx=NULL, ls;
   sexp_gc_var4(tmp, sym, args, env);
   args = SEXP_NULL;
   env = NULL;
@@ -410,6 +304,17 @@ void run_main (int argc, char **argv) {
   /* parse options */
   for (i=1; i < argc && argv[i][0] == '-'; i++) {
     switch ((c=argv[i][1])) {
+    case 'D':
+      init_context();
+      arg = (argv[i][2] == '\0') ? argv[++i] : argv[i]+2;
+      sym = sexp_intern(ctx, arg, -1);
+      ls = sexp_global(ctx, SEXP_G_FEATURES);
+      if (sexp_pairp(ls)) {
+        for (; sexp_pairp(sexp_cdr(ls)); ls=sexp_cdr(ls))
+          ;
+        sexp_cdr(ls) = sexp_cons(ctx, sym, SEXP_NULL);
+      }
+      break;
     case 'e':
     case 'p':
       mods_loaded = 1;
@@ -450,19 +355,20 @@ void run_main (int argc, char **argv) {
         suffix = sexp_import_suffix;
       }
       mods_loaded = 1;
-      load_init(c == 'x');      /* only load the meta-env if we're */
-                                /* explicitly setting a language   */
+      load_init(c == 'x');
 #if SEXP_USE_MODULES
       check_nonull_arg(c, arg);
       impmod = make_import(prefix, arg, suffix);
       tmp = check_exception(ctx, sexp_eval_string(ctx, impmod, -1, (c=='x' ? sexp_global(ctx, SEXP_G_META_ENV) : env)));
       free(impmod);
       if (c == 'x') {
-        sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV), sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), env);
+        sexp_set_parameter(ctx, sexp_global(ctx, SEXP_G_META_ENV), sexp_global(ctx, SEXP_G_INTERACTION_ENV_SYMBOL), tmp);
         sexp_context_env(ctx) = env = tmp;
+        sexp_add_import_binding(ctx, env);
         tmp = sexp_param_ref(ctx, env, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL));
-        if (tmp != NULL && !sexp_oportp(tmp))
+        if (tmp != NULL && !sexp_oportp(tmp)) {
           sexp_load_standard_ports(ctx, env, stdin, stdout, stderr, 0);
+        }
       }
 #endif
       break;
@@ -514,9 +420,10 @@ void run_main (int argc, char **argv) {
         fprintf(stderr, "-:i <file>: image files must be loaded first\n");
         exit_failure();
       }
-      ctx = sexp_load_image(arg, heap_size, heap_max_size);
-      if (!ctx) {
+      ctx = sexp_load_image(arg, 0, heap_size, heap_max_size);
+      if (!ctx || !sexp_contextp(ctx)) {
         fprintf(stderr, "-:i <file>: couldn't open file for reading: %s\n", arg);
+        fprintf(stderr, "            %s\n", sexp_load_image_err());
         exit_failure();
       }
       env = sexp_load_standard_params(ctx, sexp_context_env(ctx));
@@ -528,8 +435,11 @@ void run_main (int argc, char **argv) {
         env = sexp_load_standard_env(ctx, env, SEXP_SEVEN);
       }
       arg = ((argv[i][2] == '\0') ? argv[++i] : argv[i]+2);
-      if (!sexp_save_image(ctx, arg))
+      if (sexp_save_image(ctx, arg) != SEXP_TRUE) {
+        fprintf(stderr, "-d <file>: couldn't save image to file: %s\n", arg);
+        fprintf(stderr, "           %s\n", sexp_load_image_err());
         exit_failure();
+      }
       quit = 1;
       break;
 #endif
@@ -541,7 +451,7 @@ void run_main (int argc, char **argv) {
       tmp = sexp_env_ref(ctx, env, sym=sexp_intern(ctx, "*features*", -1), SEXP_NULL);
       sexp_write(ctx, tmp, out);
       sexp_newline(ctx, out);
-      return;
+      return SEXP_TRUE;
 #if SEXP_USE_FOLD_CASE_SYMS
     case 'f':
       fold_case = 1;
@@ -564,19 +474,27 @@ void run_main (int argc, char **argv) {
       break;
     case 't':
       mods_loaded = 1;
-      load_init(0);
+      load_init(1);
       arg = ((argv[i][2] == '\0') ? argv[++i] : argv[i]+2);
 #if SEXP_USE_MODULES
+      check_nonull_arg('t', arg);
       suffix = strrchr(arg, '.');
       sym = sexp_intern(ctx, suffix + 1, -1);
       *(char*)suffix = '\0';
-      impmod = make_import(sexp_environment_prefix, arg, sexp_environment_suffix);
+      impmod = make_import(sexp_trace_prefix, arg, sexp_trace_suffix);
       tmp = check_exception(ctx, sexp_eval_string(ctx, impmod, -1, sexp_meta_env(ctx)));
+      if (!(tmp && sexp_envp(tmp))) {
+        fprintf(stderr, "couldn't find library to trace: %s\n", impmod);
+      } else if (!((sym = sexp_env_cell(ctx, tmp, sym, 0)))) {
+        fprintf(stderr, "couldn't find binding to trace: %s in %s\n", suffix + 1, impmod);
+      } else {
+        sym = sexp_list1(ctx, sym);
+        tmp = check_exception(ctx, sexp_eval_string(ctx, "(environment '(chibi trace))", -1, sexp_meta_env(ctx)));
+        tmp = sexp_env_ref(ctx, tmp, sexp_intern(ctx, "trace-cell", -1), 0);
+        if (tmp && sexp_procedurep(tmp))
+          check_exception(ctx, sexp_apply(ctx, tmp, sym));
+      }
       free(impmod);
-      sym = sexp_list1(ctx, sexp_env_cell(ctx, tmp, sym, 0));
-      tmp = check_exception(ctx, sexp_eval_string(ctx, "(environment '(chibi trace))", -1, sexp_meta_env(ctx)));
-      tmp = sexp_env_ref(ctx, tmp, sexp_intern(ctx, "trace-cell", -1), 0);
-      check_exception(ctx, sexp_apply(ctx, tmp, sym));
 #endif
       break;
     default:
@@ -589,13 +507,14 @@ void run_main (int argc, char **argv) {
 
  done_options:
   if (!quit || main_symbol != NULL) {
-    load_init(0);
+    init_context();
     /* build argument list */
     if (i < argc)
       for (j=argc-1; j>=i; j--)
         args = sexp_cons(ctx, tmp=sexp_c_string(ctx,argv[j],-1), args);
     if (i >= argc || main_symbol != NULL)
       args = sexp_cons(ctx, tmp=sexp_c_string(ctx,argv[0],-1), args);
+    load_init(i < argc || main_symbol != NULL);
     sexp_set_parameter(ctx, sexp_meta_env(ctx), sym=sexp_intern(ctx, sexp_argv_symbol, -1), args);
     if (i >= argc && main_symbol == NULL) {
       /* no script or main, run interactively */
@@ -676,7 +595,11 @@ void run_main (int argc, char **argv) {
   }
 
   sexp_gc_release4(ctx);
-  sexp_destroy_context(ctx);
+  if (sexp_destroy_context(ctx) == SEXP_FALSE) {
+    fprintf(stderr, "destroy_context error\n");
+    return SEXP_FALSE;
+  }
+  return SEXP_TRUE;
 }
 
 #ifdef EMSCRIPTEN
@@ -696,7 +619,10 @@ int main (int argc, char **argv) {
   signal(SIGSEGV, sexp_segfault_handler); 
 #endif
   sexp_scheme_init();
-  run_main(argc, argv);
-  exit_success();
+  if (run_main(argc, argv) == SEXP_FALSE) {
+    exit_failure();
+  } else {
+    exit_success();
+  }
   return 0;
 }

@@ -69,12 +69,19 @@
             (else (lp (cdr ls) res))))))
 
 (define (analyze-module-source name mod recursive?)
-  (let ((env (module-env mod))
+  (let ((env (make-environment))
         (dir (module-dir mod)))
     (define (include-source file)
       (cond ((find-module-file (string-append dir file))
-             => (lambda (x) (cons 'body (file->sexp-list x))))
+             => (lambda (x) (cons 'begin (file->sexp-list x))))
             (else (error "couldn't find include" file))))
+    (cond
+     ((equal? '(chibi) name)
+      (env-define! env '*features* *features*)
+      (env-define! env '*shared-object-extension* *shared-object-extension*)
+      (%import env (primitive-environment 7) #f #t))
+     (else
+      (resolve-module-imports env (module-meta-data mod))))
     (let lp ((ls (module-meta-data mod)) (res '()))
       (cond
        ((not (pair? ls))
@@ -90,13 +97,17 @@
                     (analyze-module mod2-name #t))))
             (cdar ls))
            (lp (cdr ls) res))
-          ((include)
+          ((include include-ci)
            (lp (append (map include-source (cdar ls)) (cdr ls)) res))
-          ((body begin)
+          ((include-library-declarations)
+           (lp (append (append-map file->sexp-list (cdar ls)) (cdr ls)) res))
+          ((begin body)
            (let lp2 ((ls2 (cdar ls)) (res res))
              (cond
               ((pair? ls2)
-               (lp2 (cdr ls2) (cons (analyze (car ls2) env) res)))
+               (let ((x (analyze (car ls2) env)))
+                 (eval (car ls2) env)
+                 (lp2 (cdr ls2) (cons x res))))
               (else
                (lp (cdr ls) res)))))
           (else
@@ -104,10 +115,12 @@
 
 (define (analyze-module name . o)
   (let ((recursive? (and (pair? o) (car o)))
-        (res (load-module name)))
-    (if (not (module-ast res))
-        (module-ast-set! res (analyze-module-source name res recursive?)))
-    res))
+        (mod (load-module name)))
+    (cond
+     ((not (module-ast mod))
+      (module-ast-set! mod '())       ; break cycles, just in case
+      (module-ast-set! mod (analyze-module-source name mod recursive?))))
+    mod))
 
 (define (module-ref mod var-name . o)
   (let ((cell (env-cell (module-env (if (module? mod) mod (load-module mod)))
@@ -121,13 +134,13 @@
        #t))
 
 (define (module-defines? name mod var-name)
-  (if (not (module-ast mod))
-      (module-ast-set! mod (analyze-module-source name mod #f)))
-  (let lp ((ls (module-ast mod)))
-    (and (pair? ls)
-         (or (and (set? (car ls))
-                  (eq? var-name (ref-name (set-var (car ls)))))
-             (lp (cdr ls))))))
+  (let lp ((ls (module-ast (analyze-module name))))
+    (cond
+     ((null? ls) #f)
+     ((and (set? (car ls))
+           (eq? var-name (ref-name (set-var (car ls))))))
+     ((seq? (car ls)) (lp (append (seq-ls (car ls)) (cdr ls))))
+     (else (lp (cdr ls))))))
 
 (define (containing-module x)
   (let lp1 ((ls (reverse *modules*)))
@@ -138,24 +151,30 @@
                  (lp1 (cdr ls))
                  (let ((cell (env-cell env (car e-ls))))
                    (if (and (eq? x (cdr cell))
-                            (module-defines? (caar ls) (cdar ls) (car cell)))
+                            (or (opcode? x)
+                                (module-defines? (caar ls) (cdar ls) (car cell))))
                        (car ls)
                        (lp2 (cdr e-ls))))))))))
 
 (define (procedure-analysis x . o)
-  (let ((name (if (procedure? x) (procedure-name x) x))
-        (mod (or (and (pair? o) (car o)) (containing-module x))))
-    (and mod
-         (let lp ((ls (module-ast (analyze-module (module-name mod)))))
-           (and (pair? ls)
-                (cond
-                 ((and (set? (car ls))
-                       (eq? name (ref-name (set-var (car ls)))))
-                  (set-value (car ls)))
-                 ((seq? (car ls))
-                  (lp (append (seq-ls (car ls)) (cdr ls))))
-                 (else
-                  (lp (cdr ls)))))))))
+  (cond
+   ((opcode? x)
+    #f)
+   (else
+    (let ((name (if (procedure? x) (procedure-name x) x))
+          (mod (or (and (pair? o) (car o))
+                   (containing-module x))))
+      (and mod
+           (let lp ((ls (module-ast (analyze-module (module-name mod)))))
+             (and (pair? ls)
+                  (cond
+                   ((and (set? (car ls))
+                         (eq? name (ref-name (set-var (car ls)))))
+                    (set-value (car ls)))
+                   ((seq? (car ls))
+                    (lp (append (seq-ls (car ls)) (cdr ls))))
+                   (else
+                    (lp (cdr ls)))))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; finding all available modules

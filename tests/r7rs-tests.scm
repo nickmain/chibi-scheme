@@ -450,14 +450,14 @@
 ;; Syntax pattern with ellipsis in middle of improper list.
 (define-syntax part-2x
   (syntax-rules ()
-    ((_ a b (m n) ... x y . rest)
+    ((_ (a b (m n) ... x y . rest))
      (vector (list a b) (list m ...) (list n ...) (list x y)
              (cons "rest:" 'rest)))
     ((_ . rest) 'error)))
 (test '#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:"))
-    (part-2x 10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77))
+    (part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77)))
 (test '#((10 43) (31 41 51) (32 42 52) (63 77) ("rest:" . "tail"))
-    (part-2x 10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77 . "tail"))
+    (part-2x (10 (+ 21 22) (31 32) (41 42) (51 52) (+ 61 2) 77 . "tail")))
 
 ;; underscore
 (define-syntax count-to-2
@@ -491,6 +491,23 @@
 (test 42 (mad-hatter))
 
 (test 'ok (let ((=> #f)) (cond (#t => 'ok))))
+
+(let ()
+  (define x 1)
+  (let-syntax ()
+    (define x 2)
+    #f)
+  (test 1 x))
+
+(let ()
+ (define-syntax foo
+   (syntax-rules ()
+     ((foo bar y)
+      (define-syntax bar
+        (syntax-rules ()
+          ((bar x) 'y))))))
+ (foo bar x)
+ (test 'x (bar 1)))
 
 (test-end)
 
@@ -836,10 +853,13 @@
 (test 0.0 (inexact (tan 0))) ;; may return exact number
 (test 1.5574077246549 (tan 1))
 
-(test 0.0 (asin 0))
+(test 0.0 (inexact (asin 0))) ;; may return exact number
 (test 1.5707963267949 (asin 1))
-(test 0.0 (acos 1))
+(test 0.0 (inexact (acos 1))) ;; may return exact number
 (test 3.14159265358979 (acos -1))
+
+;; (test 0.0-0.0i (asin 0+0.0i))
+;; (test 1.5707963267948966+0.0i (acos 0+0.0i))
 
 (test 0.0 (atan 0.0 1.0))
 (test -0.0 (atan -0.0 1.0))
@@ -2040,7 +2060,7 @@
 (test '(a . b) (read (open-input-string "(a . b #;c)")))
 
 (define (test-read-error str)
-  (test-assert
+  (test-assert str
       (guard (exn (else #t))
         (read (open-input-string str))
         #f)))
@@ -2083,6 +2103,30 @@
 (test "line 1continued\n" (read (open-input-string "\"line 1\\ \t \n \t continued\n\"")))
 (test "line 1\n\nline 3\n" (read (open-input-string "\"line 1\\ \t \n \t \n\nline 3\n\"")))
 (test #x03BB (char->integer (string-ref (read (open-input-string "\"\\x03BB;\"")) 0)))
+
+(define-syntax test-write-syntax
+  (syntax-rules ()
+    ((test-write-syntax expect-str obj-expr)
+     (let ((out (open-output-string)))
+       (write obj-expr out)
+       (test expect-str (get-output-string out))))))
+
+(test-write-syntax "|.|" '|.|)
+(test-write-syntax "|a b|" '|a b|)
+(test-write-syntax "|,a|" '|,a|)
+(test-write-syntax "|\"|" '|\"|)
+(test-write-syntax "a" '|a|)
+;; (test-write-syntax "a.b" '|a.b|)
+(test-write-syntax "|2|" '|2|)
+(test-write-syntax "|+3|" '|+3|)
+(test-write-syntax "|-.4|" '|-.4|)
+(test-write-syntax "|+i|" '|+i|)
+(test-write-syntax "|-i|" '|-i|)
+(test-write-syntax "|+inf.0|" '|+inf.0|)
+(test-write-syntax "|-inf.0|" '|-inf.0|)
+(test-write-syntax "|+nan.0|" '|+nan.0|)
+(test-write-syntax "|+NaN.0|" '|+NaN.0|)
+(test-write-syntax "|+NaN.0abc|" '|+NaN.0abc|)
 
 (test-end)
 

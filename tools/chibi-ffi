@@ -40,6 +40,7 @@
 (define *methods* '())
 (define *consts* '())
 (define *inits* '())
+(define *clibs* '())
 (define *tags* '())
 (define *open-namespaces* '())
 (define *c++?* #f)
@@ -405,6 +406,9 @@
 (define (ffi-include file)
   (load file (current-environment)))
 
+(define (c-link lib)
+  (set! *clibs* (cons lib *clibs*)))
+
 (define (c-declare . args)
   (apply cat args)
   (newline))
@@ -760,7 +764,7 @@
             (void*? (void-pointer-type? type)))
         (cond
          ((or ctype void*?)
-          (cat (if (type-reference? type) "*" "")
+          (cat (if (or (type-struct? type) (type-reference? type)) "*" "")
                "(" (type-c-name type) ")"
                (if (type-null? type)
                    "sexp_cpointer_maybe_null_value"
@@ -984,6 +988,9 @@
       ((status-bool) (cat "  bool err;\n"))
       ((non-null-string) (cat "  char *err;\n"))
       ((non-null-pointer) (cat "  void *err;\n")))
+    (if (type-struct? ret-type)
+        (cat "  struct " (type-base ret-type) " struct_res;\n"
+             "  struct " (type-base ret-type) "* ptr_res;\n"))
     (cond
      ((pair? ints)
       (cat "  int " (car ints))
@@ -1177,8 +1184,10 @@
         (cat " loop:\n"))
     (cat (cond ((error-type? (type-base ret-type)) "  err = ")
                ((type-array ret-type) "  tmp = ")
+               ((type-struct? ret-type) "  struct_res = ")
                (else "  res = ")))
-    ((if (type-array ret-type)
+    ((if (or (type-array ret-type)
+             (type-struct? ret-type))
          (lambda (t f x) (f))
          c->scheme-converter)
      ret-type
@@ -1223,7 +1232,15 @@
            "  if (sexp_filenop(" res "))\n"
            "    fcntl(sexp_fileno_fd(" res "), F_SETFL, O_NONBLOCK "
            " | fcntl(sexp_fileno_fd(" res "), F_GETFL));\n"
-           "#endif\n")))))
+           "#endif\n")))
+   ;; non-pointer struct return types need to be copied to the heap
+   ((type-struct? result)
+    (cat
+     "  ptr_res = (" (type-c-name result) ") malloc(sizeof("
+     (type-c-name-derefed result) "));\n"
+     "  memcpy(ptr_res, &struct_res, sizeof(" (type-c-name-derefed result) "));\n"
+     "  res = sexp_make_cpointer(ctx, sexp_unbox_fixnum(sexp_opcode_return_type(self)), ptr_res, SEXP_FALSE, 0);\n"))
+   ))
 
 (define (write-result result . o)
   (let ((res (string-append "res" (type-index-string result)))
@@ -1373,7 +1390,7 @@
     (write-gc-release gc-vars)))
 
 (define (write-func-declaration func)
-  (cat "static sexp " (func-stub-name func)
+  (cat "sexp " (func-stub-name func)
        " (sexp ctx, sexp self, sexp_sint_t n"
        (write-parameters (func-scheme-args func)) ")"))
 
@@ -1499,7 +1516,7 @@
                           (else 1))
                     ", "))
              "")
-         "(sexp_proc1)" (func-stub-name func)
+         (func-stub-name func)
          (cond
           (default (lambda () (cat ", " (write-default default))))
           (no-bind? ", SEXP_VOID")
@@ -1651,7 +1668,7 @@
                "((" (x->string (or (type-struct-type name) ""))
                " " (x->string name) "*)"
                "sexp_cpointer_value(x))")))
-    (cat "static sexp " (type-getter-name type name field)
+    (cat "sexp " (type-getter-name type name field)
          " (sexp ctx, sexp self, sexp_sint_t n, sexp x) {\n"
          (lambda () (write-validator "x" (parse-type name 0)))
          "  return "
@@ -1728,7 +1745,7 @@
              (lambda () (scheme->c-converter (car field) val)) ";\n"))))))
 
 (define (write-type-setter type name field)
-  (cat "static sexp " (type-setter-name type name field)
+  (cat "sexp " (type-setter-name type name field)
        " (sexp ctx, sexp self, sexp_sint_t n, sexp x, sexp v) {\n"
        (lambda () (write-validator "x" (parse-type name 0)))
        (lambda () (write-validator "v" (parse-type (car field) 1)))
@@ -1745,7 +1762,7 @@
                 (scheme-name (if (pair? y) (car y) y))
                 (cname (if (pair? y) (cadr y) y))
                 (method? (not (memq 'finalizer: type))))
-           (cat "static sexp " (generate-stub-name scheme-name)
+           (cat "sexp " (generate-stub-name scheme-name)
                 " (sexp ctx, sexp self, sexp_sint_t n, sexp x) {\n"
                 "  if (sexp_cpointer_freep(x)) {\n"
                 "    " (if method? "" cname) "("
@@ -1770,7 +1787,7 @@
     => (lambda (x)
          (let ((make (car (cadr x)))
                (args (cdr (cadr x))))
-           (cat "static sexp " (generate-stub-name make)
+           (cat "sexp " (generate-stub-name make)
                 " (sexp ctx, sexp self, sexp_sint_t n"
                 (lambda ()
                   (let lp ((ls args) (i 0))
@@ -1911,7 +1928,7 @@
          (let ((name (type-c-name-derefed (car t)))
                (finalizer-name (type-finalizer-name (car t))))
            (cat
-            "static sexp " finalizer-name " ("
+            "sexp " finalizer-name " ("
             "sexp ctx, sexp self, sexp_sint_t n, sexp obj) {\n"
             "  if (sexp_cpointer_freep(obj))\n"
             "    delete static_cast<" name "*>"
@@ -1978,6 +1995,7 @@
 (let ((args (command-line)))
   (let lp ((args (if (pair? args) (cdr args) args))
            (compile? #f)
+           (cc #f)
            (cflags '())
            (features '()))
     (cond
@@ -1985,12 +2003,15 @@
            (eqv? #\- (string-ref (car args) 0)))
       (case (string->symbol (car args))
         ((-c --compile)
-         (lp (cdr args) #t cflags features))
+         (lp (cdr args) #t cc cflags features))
+        ((-cc --cc)
+         (lp (cddr args) compile? (cadr args) cflags features))
         ((-f --flags)
          (if (null? (cdr args))
              (error "--flags requires an argument"))
          (lp (cddr args)
              compile?
+             cc
              (append cflags (string-split (cadr args) #\space))
              features))
         ((--features)
@@ -1998,6 +2019,7 @@
              (error "--features requires an argument"))
          (lp (cddr args)
              compile?
+             cc
              cflags
              (append features (string-split (cadr args) #\,))))
         (else
@@ -2017,8 +2039,8 @@
                  (error "usage: chibi-ffi [-c] <file.stub> [<output.c>]")))))
         (if (not (equal? "/dev/stdin" src))
             (let ((slash (string-scan-right src #\/)))
-              (if (> slash 0)
-                  (set! wdir (substring-cursor src 0 slash)))))
+              (if (string-cursor>? slash (string-cursor-start src))
+                  (set! wdir (substring-cursor src (string-cursor-start src) slash)))))
         (if (equal? "-" dest)
             (generate src)
             (with-output-to-file dest (lambda () (generate src))))
@@ -2031,11 +2053,13 @@
                  (execute (begin (eval '(import (chibi process))
                                        (current-environment))
                                  (eval 'execute (current-environment))))
-                 (base-args (append cflags `("-o" ,so ,dest "-lchibi-scheme")))
+                 (base-args (append cflags `("-o" ,so ,dest "-lchibi-scheme")
+                                    (map (lambda (x) (string-append "-l" x))
+                                         (reverse *clibs*))))
                  (args
                   (eval
                    `(cond-expand
                      (macosx (append '("-dynamiclib" "-Oz") ',base-args))
                      (else (append '("-fPIC" "-shared" "-Os") ',base-args)))))
-                 (cc (if *c++?* "c++" "cc")))
+                 (cc (or cc (if *c++?* "c++" "cc"))))
             (execute cc (cons cc args))))))))))

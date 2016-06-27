@@ -19,7 +19,7 @@
 
 (define (extract-snowball-package bv)
   (define (path-top path)
-    (substring path 0 (string-find path #\/)))
+    (substring-cursor path (string-cursor-start path) (string-find path #\/)))
   (guard (exn
           (else
            (log-error "couldn't extract package.scm: " exn)
@@ -74,17 +74,17 @@
          (actual-digest ((lookup-digest digest-name) snowball))
          (sig (assoc-get (cdr sig-spec) 'rsa))
          (email (assoc-get (cdr sig-spec) 'email))
-         (rsa-key-sexp (find (rsa-identity=? email)
-                             (repo-publishers cfg)))
+         (publisher (find (rsa-identity=? email)
+                          (repo-publishers cfg)))
          (verify-rsa? (conf-get cfg 'verify-signatures?))
          (rsa-key (and verify-rsa?
-                       (pair? rsa-key-sexp)
-                       (extract-rsa-public-key (cdr rsa-key-sexp)))))
+                       (pair? publisher)
+                       (extract-rsa-public-key (cdr publisher)))))
     (cond
      ((not (equal? digest actual-digest))
       (string-append "the " digest-name " digest in the signature <" digest
                      "> didn't match the actual value: <" actual-digest ">"))
-     ((and rsa-key-sexp (not rsa-key))
+     ((not publisher)
       (string-append "unknown publisher: " email))
      ((and verify-rsa?
            (not (rsa-verify? rsa-key
@@ -179,8 +179,11 @@
   (rewrite-repo
    cfg
    (lambda (repo)
-     (let ((repo (if (pair? repo) repo '(repository))))
-       `(,(car repo) ,value ,@(remove rem-pred (cdr repo)))))))
+     (let*-values (((repo) (if (pair? repo) repo '(repository)))
+                   ((drop keep) (partition rem-pred (cdr repo))))
+       `(,(car repo)
+         ,(if (procedure? value) (value repo drop) value)
+         ,@keep)))))
 
 (define (update-repo-object cfg key-field value)
   (let* ((type (car value))
@@ -192,7 +195,7 @@
                  (equal? key-value (assoc-get (cdr x) key-field eq?))))))
     (update-repo cfg pred value)))
 
-(define (update-repo-package cfg pkg)
+(define (update-repo-package cfg pkg . o)
   (let* ((email (package-email pkg))
          (auth-pred (lambda (x) (equal? email (package-email x))))
          (pkg-pred
@@ -210,21 +213,24 @@
          (rem-pred
           (lambda (x)
             (and (pair? x) (eq? 'package (car x))
-                 (auth-pred x) (pkg-pred x)))))
-    (update-repo cfg rem-pred pkg)))
+                 (auth-pred x) (pkg-pred x))))
+         (value (if (pair? o) (lambda (repo drop) ((car o) repo drop pkg)) pkg)))
+    (update-repo cfg rem-pred value)))
 
 (define (fail msg . args)
   `(span (@ (style . "background:red")) ,msg ,@args))
 
-(define (page body)
+(define (page body . o)
   `(html
     (head
      (title "Snow")
+     (meta (@ (charset . "utf-8")))
      (link (@ (type . "text/css")
               (rel . "stylesheet")
               (href . "/s/snow.css")))
      (link (@ (rel . "shortcut icon")
-              (href . "/s/favicon.ico"))))
+              (href . "/s/favicon.ico")))
+     ,@o)
     (body
      (div (@ (id . "head"))
           (div (@ (id . "head_pic")) "☃")
@@ -255,7 +261,12 @@
   (let ((sexp? (equal? "sexp" (request-param request "fmt"))))
     (servlet-write
      request
-     (if sexp?
-         (call-with-current-continuation proc)
-         (sxml->xml (proc (lambda (x) x)))))
+     (cond
+      (sexp?
+       (call-with-current-continuation proc))
+      (else
+       (let ((res (sxml->xml (proc (lambda (x) x)))))
+         (servlet-respond request 200 "OK"
+                          '((Content-Type . "text/html; charset=utf-8")))
+         res))))
     (if sexp? (servlet-write request "\n"))))

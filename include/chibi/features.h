@@ -84,6 +84,11 @@
 /*   go away and you're not working on your own C extension. */
 /* #define SEXP_USE_CONSERVATIVE_GC 1 */
 
+/* uncomment this to disable automatic running of finalizers */
+/*   You will need to close ports and file descriptors manually */
+/*   (as you should anyway) and some C extensions may break. */
+/* #define SEXP_USE_FINALIZERS 0 */
+
 /* uncomment this to add additional native checks to only mark objects in the heap */
 /* #define SEXP_USE_SAFE_GC_MARK 1 */
 
@@ -99,6 +104,9 @@
 
 /* uncomment this to add very verbose debugging stats to the native GC */
 /* #define SEXP_USE_DEBUG_GC 1 */
+
+/* uncomment this to add instrumentation to the native GC */
+/* #define SEXP_USE_TIME_GC 1 */
 
 /* uncomment this to enable "safe" field accessors for primitive types */
 /*   The sexp union type fields are abstracted away with macros of the */
@@ -187,6 +195,11 @@
 /* uncomment this to disable extended char names as defined in R7RS */
 /* #define SEXP_USE_EXTENDED_CHAR_NAMES 0 */
 
+/* uncomment this to disable R7RS #<n>= and #<n># reader labels in source */
+/*   The (scheme read) and (scheme write) libraries always support */
+/*   this regardless. */
+/* #define SEXP_USE_READER_LABELS 0 */
+
 /* uncomment this to disable UTF-8 string support */
 /*   The default settings store strings in memory as UTF-8, */
 /*   and assumes strings passed to/from the C FFI are UTF-8.  */
@@ -197,10 +210,12 @@
 /*   Making them immutable allows for packed UTF-8 strings. */
 /* #define SEXP_USE_MUTABLE_STRINGS 0 */
 
-/* uncomment this to base string ports on C streams */
-/*   This historic option enables string and custom ports backed */
-/*   by FILE* objects using memstreams and funopen/fopencookie. */
-/* #define SEXP_USE_STRING_STREAMS 1 */
+/* uncomment this to make string cursors just fixnum offsets */
+/*   The default when using UTF-8 is to have a disjoint string */
+/*   cursor type.  This is an immediate type with no loss in  */
+/*   performance, and prevents confusion mixing indexes and */
+/*   cursors. */
+/* #define SEXP_USE_DISJOINT_STRING_CURSORS 0 */
 
 /* uncomment this to disable automatic closing of ports */
 /*   If enabled, the underlying FILE* for file ports will be */
@@ -379,12 +394,20 @@
 #define SEXP_USE_DEBUG_GC 0
 #endif
 
+#ifndef SEXP_USE_TIME_GC
+#define SEXP_USE_TIME_GC SEXP_USE_DEBUG_GC > 0
+#endif
+
 #ifndef SEXP_USE_SAFE_GC_MARK
 #define SEXP_USE_SAFE_GC_MARK SEXP_USE_DEBUG_GC > 1
 #endif
 
 #ifndef SEXP_USE_CONSERVATIVE_GC
 #define SEXP_USE_CONSERVATIVE_GC 0
+#endif
+
+#ifndef SEXP_USE_FINALIZERS
+#define SEXP_USE_FINALIZERS 1
 #endif
 
 #ifndef SEXP_USE_TRACK_ALLOC_SOURCE
@@ -583,6 +606,10 @@
 #define SEXP_USE_EXTENDED_CHAR_NAMES ! SEXP_USE_NO_FEATURES
 #endif
 
+#ifndef SEXP_USE_READER_LABELS
+#define SEXP_USE_READER_LABELS ! SEXP_USE_NO_FEATURES
+#endif
+
 #ifndef SEXP_USE_UTF8_STRINGS
 #define SEXP_USE_UTF8_STRINGS ! SEXP_USE_NO_FEATURES
 #endif
@@ -598,8 +625,8 @@
 #define SEXP_USE_PACKED_STRINGS 1
 #endif
 
-#ifndef SEXP_USE_STRING_STREAMS
-#define SEXP_USE_STRING_STREAMS 0
+#ifndef SEXP_USE_DISJOINT_STRING_CURSORS
+#define SEXP_USE_DISJOINT_STRING_CURSORS SEXP_USE_UTF8_STRINGS
 #endif
 
 #ifndef SEXP_USE_AUTOCLOSE_PORTS
@@ -668,6 +695,14 @@
 #define SEXP_DEFAULT_EQUAL_BOUND 100000000
 #endif
 
+#ifndef SEXP_STRIP_SYNCLOS_BOUND
+#define SEXP_STRIP_SYNCLOS_BOUND 10000
+#endif
+
+#ifndef SEXP_POLL_SLEEP_TIME
+#define SEXP_POLL_SLEEP_TIME 5000
+#endif
+
 #ifndef SEXP_USE_IMAGE_LOADING
 #define SEXP_USE_IMAGE_LOADING SEXP_USE_DL && !SEXP_USE_GLOBAL_HEAP && !SEXP_USE_BOEHM && !SEXP_USE_NO_FEATURES
 #endif
@@ -723,6 +758,15 @@
 #define isinf(x) (isInf(x,1) || isInf(x,-1))
 #define isnan(x) isNaN(x)
 #elif defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS 1
+#define _CRT_NONSTDC_NO_DEPRECATE 1
+#pragma warning(disable:4146) /* unary minus operator to unsigned type */
+#define strcasecmp lstrcmpi
+#define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)
+#ifdef __MINGW32__
+#include <shlwapi.h>
+#define strcasestr StrStrI
+#else
 #define snprintf(buf, len, fmt, val) sprintf(buf, fmt, val)
 #define strcasecmp lstrcmpi
 #define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)
@@ -730,6 +774,7 @@
 #define trunc(x) floor((x)+0.5*(((x)<0)?1:0))
 #define isnan(x) (x!=x)
 #define isinf(x) (x > DBL_MAX || x < -DBL_MAX)
+#endif
 #endif
 
 #ifdef _WIN32

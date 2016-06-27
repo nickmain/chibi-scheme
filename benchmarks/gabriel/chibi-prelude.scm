@@ -1,5 +1,5 @@
 
-(import (chibi time) (scheme cxr) (srfi 33) (srfi 39))
+(import (chibi ast) (chibi time) (scheme cxr) (srfi 33) (srfi 39))
 
 (define (timeval->milliseconds tv)
   (quotient (+ (* 1000000 (timeval-seconds tv)) (timeval-microseconds tv))
@@ -9,8 +9,11 @@
   (call-with-output-string
     (lambda (out)
       (let* ((start (car (get-time-of-day)))
+             (gc-start (gc-usecs))
              (result (parameterize ((current-output-port out)) (thunk)))
              (end (car (get-time-of-day)))
+             (gc-end (gc-usecs))
+             (gc-msecs (quotient (- gc-end gc-start) 1000))
              (msecs (- (timeval->milliseconds end)
                        (timeval->milliseconds start))))
         (display "user: ")
@@ -18,8 +21,11 @@
         (display " system: 0")
         (display " real: ")
         (display msecs)
-        (display " gc: 0")
-        (newline)
+        (display " gc: ")
+        (display gc-msecs)
+        (display " (")
+        (display (gc-count))
+        (display " times)\n")
         (display "result: ")
         (write result)
         (newline)

@@ -5,9 +5,12 @@
 
 (define-library (chibi string)
   (export
+   string-cursor?
    string-cursor-start string-cursor-end string-cursor-ref
    string-cursor<? string-cursor<=? string-cursor>? string-cursor>=?
    string-cursor=? string-cursor-next string-cursor-prev substring-cursor
+   string-cursor->index string-index->cursor
+   string-cursor-forward string-cursor-back
    string-null? string-every string-any
    string-join string-split string-count
    string-trim string-trim-left string-trim-right
@@ -43,6 +46,9 @@
     (import (scheme base) (scheme char) (srfi 14)
             (except (srfi 1) make-list list-copy))
     (begin
+      (define (string-cursor->index str i) i)
+      (define (string-index->cursor str i) i)
+      (define string-cursor? integer?)
       (define string-cursor<? <)
       (define string-cursor>? >)
       (define string-cursor=? =)
@@ -67,10 +73,10 @@
     (import (only (srfi 13) string-contains)))
    (else
     (begin
-      (define (string-contains a b)
+      (define (string-contains a b . o)  ; really, stupidly slow
        (let ((alen (string-length a))
              (blen (string-length b)))
-         (let lp ((i 0))
+         (let lp ((i (if (pair? o) (car o) 0)))
            (and (<= (+ i blen) alen)
                 (if (string=? b (substring a i (+ i blen)))
                     i

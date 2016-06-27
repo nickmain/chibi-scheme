@@ -68,6 +68,8 @@
     (if (union-type? b)
         (cons (car a) (lset-union type=? (cdr a) (cdr b)))
         (cons (car a) (lset-adjoin type=? (cdr a) b))))
+   ((union-type? b)
+    (cons (car b) (lset-adjoin type=? (cdr b) a)))
    (else (list 'or a b))))
 
 ;; XXXX check for conflicts
@@ -270,9 +272,9 @@
 
 (define (type-analyze-module name)
   (let* ((mod (analyze-module name))
-         (ls (and (vector? mod) (module-ast mod))))
+         (ls (and (module? mod) (module-ast mod))))
     (and ls
-         (let ((x (let lp ((ls ls)) ;; first lambda
+         (let ((x (let lp ((ls ls))  ;; first lambda
                     (and (pair? ls)
                          (if (and (set? (car ls))
                                   (lambda? (set-value (car ls))))
@@ -305,13 +307,17 @@
 ;;> remaining arguments are the parameter types.
 
 (define (procedure-signature x . o)
+  (define (map* f ls)
+    (cond ((pair? ls) (cons (f (car ls)) (map* f (cdr ls))))
+          ((null? ls) '())
+          (else (f ls))))
   (define (ast-sig x)
     (cond
      ((lambda? x)
       (cons (lambda-return-type x)
             (if (pair? (lambda-param-types x))
                 (lambda-param-types x)
-                (lambda-params x))))
+                (map* identifier->symbol (lambda-params x)))))
      ((seq? x) (ast-sig (last (seq-ls x))))
      ((and (pair? x) (lambda? (car x))) (ast-sig (lambda-body (car x))))
      ;; TODO: improve the type inference so this isn't needed

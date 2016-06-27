@@ -71,7 +71,7 @@
         (end (if (and (pair? o) (pair? (cdr o)))
                  (cadr o)
                  (string-cursor-end str))))
-    (< (string-find str check start end) end)))
+    (string-cursor<? (string-find str check start end) end)))
 
 ;;> As \scheme{string-find}, but returns the position of the first
 ;;> character from the right of \var{str}.  If no character matches,
@@ -193,14 +193,19 @@
 ;;> Returns true iff \var{prefix} is a prefix of \var{str}.
 
 (define (string-prefix? prefix str)
-  (= (string-cursor-end prefix) (string-mismatch prefix str)))
+  (string-cursor=? (string-cursor-end prefix) (string-mismatch prefix str)))
 
 ;;> Returns true iff \var{suffix} is a suffix of \var{str}.
 
 (define (string-suffix? suffix str)
-  (= (string-cursor-prev suffix (string-cursor-start suffix))
-     (- (string-mismatch-right suffix str)
-        (- (string-cursor-end str) (string-cursor-end suffix)))))
+  (let ((diff (- (string-size str) (string-size suffix))))
+    (and (>= diff 0)
+         (string-cursor=? (string-cursor-prev suffix
+                                              (string-cursor-start suffix))
+                          (string-cursor-back
+                           str
+                           (string-mismatch-right suffix str)
+                           diff)))))
 
 ;;> The fundamental string iterator.  Calls \var{kons} on each
 ;;> character of \var{str} and an accumulator, starting with
@@ -257,7 +262,7 @@
   (let ((pred (make-char-predicate check)))
     (string-fold (lambda (ch count) (if (pred ch) (+ count 1) count)) 0 str)))
 
-;;> \procedure{(string-contain s1 s2)}
+;;> \procedure{(string-contains s1 s2)}
 ;;>
 ;;> Returns a cursor pointing to the first position in the string
 ;;> \var{s1} where \var{s2} occurs, or \scheme{#f} if there is no such
@@ -265,9 +270,9 @@
 
 ;;> \procedure{(mamke-string-searcher needle)}
 ;;>
-;;> Partial application of \scheme{string-contain}.  Return a
+;;> Partial application of \scheme{string-contains}.  Return a
 ;;> procedure of one argument, a string, which runs
-;;> \scheme{(string-contain str \var{needle})}.
+;;> \scheme{(string-contains str \var{needle})}.
 
 (define (make-string-searcher needle)
   (lambda (haystack) (string-contains haystack needle)))
@@ -319,6 +324,16 @@
 ;;>
 ;;> Returns a string cursor to the character in \var{str} just before
 ;;> the cursor \var{i}.
+
+(define (string-cursor-forward str cursor n)
+  (if (positive? n)
+      (string-cursor-forward str (string-cursor-next str cursor) (- n 1))
+      cursor))
+
+(define (string-cursor-back str cursor n)
+  (if (positive? n)
+      (string-cursor-back str (string-cursor-prev str cursor) (- n 1))
+      cursor))
 
 ;;> \procedure{(string-cursor<? i j)}
 ;;> \procedure{(string-cursor>? i j)}
