@@ -28,16 +28,18 @@
    opcode-class opcode-code opcode-data opcode-variadic?
    macro-procedure macro-env macro-source
    procedure-code procedure-vars procedure-name procedure-name-set!
-   procedure-arity procedure-variadic?
+   procedure-arity procedure-variadic? procedure-flags
    bytecode-name bytecode-literals bytecode-source
    port-line port-line-set!
    extend-env env-parent env-parent-set! env-lambda env-lambda-set!
    env-define! env-push! env-syntactic? env-syntactic?-set! core-code
-   type-name type-cpl type-parent type-slots type-num-slots type-printer
+   type-name type-cpl type-parent type-slots type-num-slots
+   type-printer type-printer-set!
    object-size object->integer integer->immediate gc gc-usecs gc-count
    atomically thread-list abort
    string-contains string-cursor-copy! errno integer->error-string
-   flatten-dot update-free-vars! setenv unsetenv safe-setenv)
+   flatten-dot update-free-vars! setenv unsetenv safe-setenv
+   immutable? make-immutable!)
   (import (chibi))
   (include-shared "ast")
   (include "ast.scm"))

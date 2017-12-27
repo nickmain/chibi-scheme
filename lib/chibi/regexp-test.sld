@@ -1,7 +1,8 @@
 (define-library (chibi regexp-test)
   (export run-tests)
-  (import (chibi) (chibi regexp) (chibi regexp pcre)
-          (chibi string) (chibi io) (chibi match) (chibi test))
+  (import (scheme base) (scheme char) (scheme file) (scheme write)
+          (chibi regexp) (chibi regexp pcre)
+          (chibi string) (chibi match) (chibi test))
   (begin
     (define (run-tests)
       (define (maybe-match->sexp rx str . o)
@@ -206,10 +207,21 @@
 
       (test '("123" "456" "789") (regexp-extract '(+ digit) "abc123def456ghi789"))
       (test '("123" "456" "789") (regexp-extract '(* digit) "abc123def456ghi789"))
-      (test '("abc" "def" "ghi") (regexp-split '(+ digit) "abc123def456ghi789"))
-      (test '("a" "b" "c" "d" "e" "f" "g" "h" "i")
+      (test '("abc" "def" "ghi" "") (regexp-split '(+ digit) "abc123def456ghi789"))
+      (test '("abc" "def" "ghi" "")
           (regexp-split '(* digit) "abc123def456ghi789"))
       (test '("a" "b") (regexp-split '(+ whitespace) "a b"))
+      (test '("a" "" "b")
+          (regexp-split '(",;") "a,,b"))
+      (test '("a" "" "b" "")
+          (regexp-split '(",;") "a,,b,"))
+      (test '("")
+          (regexp-partition '(* digit) ""))
+      (test '("abc" "123" "def" "456" "ghi")
+          (regexp-partition '(* digit) "abc123def456ghi"))
+      (test '("abc" "123" "def" "456" "ghi" "789")
+          (regexp-partition '(* digit) "abc123def456ghi789"))
+
       (test '("한" "글")
           (regexp-extract
            'grapheme
@@ -288,10 +300,11 @@
              (error "invalid regex test line" line))))
 
         (test-group "pcre"
-          (call-with-input-file "tests/re-tests.txt"
-            (lambda (in)
-              (for-each
-               (lambda (line) (test-pcre line))
-               (port->list read-line in))))))
+          (let ((in (open-input-file "tests/re-tests.txt")))
+            (let lp ()
+              (let ((line (read-line in)))
+                (unless (eof-object? line)
+                  (test-pcre line)
+                  (lp)))))))
 
       (test-end))))

@@ -38,6 +38,7 @@
             (protect (exn
                       (else
                        (log-error "internal error: " exn)
+                       (print-stack-trace exn)
                        (servlet-respond request 500 "Internal server error")))
               (let restart ((request request))
                 (servlet cfg request servlet-bad-request restart)))))
@@ -522,4 +523,4 @@
       (verbose? boolean (#\v "verbose"))))
     ,run-app))
 
-(define (main args) (run-application app-spec args))
+(define (main args) (run-application app-spec))

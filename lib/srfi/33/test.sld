@@ -1,6 +1,6 @@
 (define-library (srfi 33 test)
   (export run-tests)
-  (import (chibi) (srfi 33) (chibi test))
+  (import (scheme base) (srfi 33) (chibi test))
   (begin
     (define (run-tests)
       (test-begin "srfi-33: bitwise operations")
@@ -67,5 +67,8 @@
 
       (test-not (bit-set? 64 1))
       (test-assert (bit-set? 64 #x10000000000000000))
+
+      (test 3 (bitwise-merge 1 1 2))
+      (test #b00110011 (bitwise-merge #b00111100 #b11110000 #b00001111))
 
       (test-end))))

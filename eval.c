@@ -58,6 +58,7 @@ sexp sexp_warn_undefs_op (sexp ctx, sexp self, sexp_sint_t n, sexp from, sexp to
   if (sexp_envp(from)) from = sexp_env_bindings(from);
   for (x=from; sexp_pairp(x) && x!=to; x=sexp_env_next_cell(x))
     if (sexp_cdr(x) == SEXP_UNDEF && sexp_car(x) != ignore
+        && !sexp_synclop(sexp_car(x))
         && sexp_not(sexp_memq(ctx, sexp_car(x), ignore)))
       sexp_warn(ctx, "reference to undefined variable: ", sexp_car(x));
   return SEXP_VOID;
@@ -618,6 +619,7 @@ static int sexp_cyclic_synclop(sexp x) {
 #endif
 
 sexp sexp_strip_synclos_bound (sexp ctx, sexp x, int depth) {
+  int i;
   sexp_gc_var3(res, kar, kdr);
   if (depth <= 0) return x;
   sexp_gc_preserve3(ctx, res, kar, kdr);
@@ -629,6 +631,9 @@ sexp sexp_strip_synclos_bound (sexp ctx, sexp x, int depth) {
     sexp_pair_source(res) = sexp_pair_source(x);
     sexp_immutablep(res) = 1;
   } else {
+    if (sexp_vectorp(x))
+      for (i = 0; i < sexp_vector_length(x); ++i)
+        sexp_vector_set(x, sexp_make_fixnum(i), sexp_strip_synclos_bound(ctx, sexp_vector_ref(x, sexp_make_fixnum(i)), depth-1));
     res = x;
   }
   sexp_gc_release3(ctx);
@@ -1128,8 +1133,10 @@ static sexp analyze (sexp ctx, sexp object, int depth, int defok) {
   } else if (sexp_nullp(x)) {
     res = sexp_compile_error(ctx, "empty application in source", x);
   } else {
-    if (sexp_pointerp(x))      /* accept vectors and other literals directly, */
+    if (sexp_pointerp(x)) {    /* accept vectors and other literals directly, */
       sexp_immutablep(x) = 1;  /* but they must be immutable */
+      x = sexp_strip_synclos(ctx , NULL, 1, x);
+    }
     res = x;
   }
 
@@ -1317,7 +1324,7 @@ static struct sexp_library_entry_t *sexp_find_static_library(const char *file)
 #endif
 
 #if SEXP_USE_DL
-#ifdef __MINGW32__
+#ifdef _WIN32
 #include <windows.h>
 static sexp sexp_load_dl (sexp ctx, sexp file, sexp env) {
   sexp res;
@@ -1350,8 +1357,10 @@ static sexp sexp_load_dl (sexp ctx, sexp file, sexp env) {
   }
   init = dlsym(handle, "sexp_init_library");
   if (! init) {
+    res = sexp_c_string(ctx, dlerror(), -1);
+    res = sexp_list2(ctx, file, res);
     dlclose(handle);
-    return sexp_compile_error(ctx, "dynamic library has no sexp_init_library", file);
+    return sexp_compile_error(ctx, "dynamic library has no sexp_init_library", res);
   }
   sexp_gc_preserve2(ctx, res, old_dl);
   old_dl = sexp_context_dl(ctx);
@@ -1486,7 +1495,7 @@ sexp sexp_register_optimization (sexp ctx, sexp self, sexp_sint_t n, sexp f, sex
     return sexp_make_flonum(ctx, cname(d));                             \
   }
 
-#ifdef SEXP_USE_COMPLEX
+#if SEXP_USE_COMPLEX
 #define define_complex_math_op(name, cname, f, a, b)		\
   sexp name (sexp ctx, sexp self, sexp_sint_t n, sexp z) {	\
     double d;                                                           \
@@ -1882,6 +1891,19 @@ sexp sexp_read_utf8_char (sexp ctx, sexp port, int i) {
     }
   }
   return sexp_make_character(i);
+}
+
+void sexp_push_utf8_char (sexp ctx, int i, sexp port) {
+  unsigned char ch[6];
+  int len = sexp_utf8_char_byte_count(i);
+  sexp_utf8_encode_char(ch, len, i);
+  if (sexp_port_stream(port))  {
+    while (len>0)
+      ungetc(ch[--len], sexp_port_stream(port));
+  } else {
+    while (len>0)
+      sexp_port_buf(port)[--sexp_port_offset(port)] = ch[--len];
+  }
 }
 
 #if SEXP_USE_MUTABLE_STRINGS

@@ -1,5 +1,5 @@
 ;; show.scm -- additional combinator formatters
-;; Copyright (c) 2013 Alex Shinn.  All rights reserved.
+;; Copyright (c) 2013-2017 Alex Shinn.  All rights reserved.
 ;; BSD-style license: http://synthcode.com/license.txt
 
 ;;> A library of procedures for formatting Scheme objects to text in
@@ -297,3 +297,17 @@
 ;;> \var{dot-f} to the dotted tail as a final element.
 (define (joined/dot elt-f dot-f ls . o)
   (joined/general elt-f #f dot-f ls (if (pair? o) (car o) "")))
+
+;;> As \scheme{joined} but counts from \var{start} to \var{end}
+;;> (exclusive), formatting each integer in the range.  If \var{end}
+;;> is \scheme{#f} or unspecified, produces an infinite stream of
+;;> output.
+(define (joined/range elt-f start . o)
+  (let ((end (and (pair? o) (car o)))
+        (sep (if (and (pair? o) (pair? (cdr o))) (cadr o) "")))
+    (let lp ((i start))
+      (if (and end (>= i end))
+          nothing
+          (each (if (> i start) sep nothing)
+                (elt-f i)
+                (fn () (lp (+ i 1))))))))

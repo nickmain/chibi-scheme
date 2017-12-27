@@ -6,6 +6,7 @@
 (define known-implementations
   '((chibi "chibi-scheme" (chibi-scheme -V) "0.7.3")
     (chicken "chicken" (csi -p "(chicken-version)") "4.9.0")
+    (cyclone "cyclone" (icyc -vn) "0.5.3")
     (foment "foment")
     (gauche "gosh" (gosh -E "print (gauche-version)" -E exit) "0.9.4")
     (kawa "kawa" (kawa --version) "2.0")
@@ -206,7 +207,12 @@
                     (append (map resolve includes) files)
                     chibi-ffi?))
                (('include-library-declarations includes ...)
-                (lp (append (append-map file->sexp-list includes) (cdr ls))
+                (lp (append (append-map
+                             (lambda (inc)
+                               (file->sexp-list
+                                (path-resolve inc (path-directory file))))
+                             includes)
+                            (cdr ls))
                     info
                     deps
                     (append (map resolve includes) files)
@@ -599,7 +605,12 @@
                     `((rename ,test
                               ,(path-strip-leading-parents test))))
                    (else '()))
-                  docs tar-data-files files))))
+                  (remove (lambda (x)
+                            (and (string? x)
+                                 (or (string-prefix? "http://" x)
+                                     (string-prefix? "https://" x))))
+                          docs)
+                  tar-data-files files))))
           (cons `(package
                   ,@(reverse res)
                   ,@(if (pair? data-files) `((data-files ,@pkg-data-files)) '())
@@ -1271,6 +1282,11 @@
 ;; If multiple implementations are targeted, we install separately but
 ;; use the same confirmations for each.
 
+(define (get-chicken-binary-version cfg)
+  (or (conf-get cfg 'chicken-binary-version)
+      (string->number (process->string '(csi -p "(##sys#fudge 42)")))
+      8))
+
 (define (get-install-dirs impl cfg)
   (define (guile-eval expr)
     (guard (exn (else #f))
@@ -1294,7 +1310,15 @@
        (list
         (if (file-exists? dir)  ; repository-path should always exist
             dir
-            (make-path (or (conf-get cfg 'install-prefix)) "lib" impl 7)))))
+            (make-path (or (conf-get cfg 'install-prefix)) "lib" impl
+                       (get-chicken-binary-version cfg))))))
+    ((cyclone)
+     (let ((dir (let ((lib-path (get-environment-variable "CYCLONE_LIBRARY_PATH")))
+                  (if lib-path
+                      (car (string-split lib-path #\:)) ; searches only in the first path set
+                      (string-trim (process->string '(icyc -p "(Cyc-installation-dir 'sld)"))
+                                   char-whitespace?)))))
+       (list (or dir "/usr/local/share/cyclone/"))))
     ((gauche)
      (list
       (let ((dir (string-trim
@@ -1330,11 +1354,13 @@
 
 (define (scheme-script-command impl cfg)
   (or (and (eq? impl 'chibi) (conf-get cfg 'chibi-path))
-      (let* ((prog (cond ((assq impl known-implementations) => cadr)
+      (let* ((prog (cond ((conf-get cfg 'scheme-script))
+                         ((assq impl known-implementations) => cadr)
                          (else "scheme-script")))
              (path (or (find-in-path prog) prog))
              (arg (case impl
                     ((chicken) "-s")
+                    ((cyclone) "-s")
                     ((gauche) "-b")
                     ((larceny) "-program")
                     (else #f))))
@@ -1343,46 +1369,53 @@
             path))))
 
 (define (scheme-program-command impl cfg file . o)
-  (let ((lib-path (and (pair? o) (car o)))
-        (install-dir (get-install-source-dir impl cfg)))
-    (case impl
-      ((chibi)
-       (let ((chibi (string-split (conf-get cfg 'chibi-path "chibi-scheme"))))
+  (cond
+   ((conf-get cfg 'scheme-program-command) => string-split)
+   (else
+    (let ((lib-path (and (pair? o) (car o)))
+          (install-dir (get-install-source-dir impl cfg)))
+      (case impl
+        ((chibi)
+         (let ((chibi (string-split (conf-get cfg 'chibi-path "chibi-scheme"))))
+           (if lib-path
+               `(,@chibi -A ,install-dir -A ,lib-path ,file)
+               `(,@chibi -A ,install-dir ,file))))
+        ((chicken)
          (if lib-path
-             `(,@chibi -A ,install-dir -A ,lib-path ,file)
-             `(,@chibi -A ,install-dir ,file))))
-      ((chicken)
-       (if lib-path
-           `(csi -R r7rs -I ,install-dir -I ,lib-path -s ,file)
-           `(csi -R r7rs -I ,install-dir -s ,file)))
-      ((foment)
-       (if lib-path
-           `(foment -A ,install-dir -A ,lib-path ,file)
-           `(foment -A ,install-dir ,file)))
-      ((gauche)
-       (if lib-path
-           `(gosh -A ,install-dir -A ,lib-path ,file)
-           `(gosh -A ,install-dir ,file)))
-      ((guile)
-       (if lib-path
-           `(guile -L ,install-dir -L ,lib-path ,file)
-           `(guile -L ,install-dir ,file)))
-      ((kawa)
-       (let ((install-dir (path-resolve install-dir (current-directory))))
+             `(csi -R r7rs -I ,install-dir -I ,lib-path -s ,file)
+             `(csi -R r7rs -I ,install-dir -s ,file)))
+        ((cyclone)
          (if lib-path
-             `(kawa
-               ,(string-append "-Dkawa.import.path=" install-dir ":"
-                               (path-resolve lib-path (current-directory)))
-               --r7rs --script ,file)
-             `(kawa ,(string-append "-Dkawa.import.path=" install-dir)
-                    --r7rs --script ,file))))
-      ((larceny)
-       (if lib-path
-           `(larceny -r7rs -path ,(string-append install-dir ":" lib-path)
-                     -program ,file)
-           `(larceny -r7rs -path ,install-dir -program ,file)))
-      (else
-       #f))))
+             `(icyc -A ,install-dir -A ,lib-path -s ,file)
+             `(icyc -A ,install-dir -s ,file)))
+        ((foment)
+         (if lib-path
+             `(foment -A ,install-dir -A ,lib-path ,file)
+             `(foment -A ,install-dir ,file)))
+        ((gauche)
+         (if lib-path
+             `(gosh -A ,install-dir -A ,lib-path ,file)
+             `(gosh -A ,install-dir ,file)))
+        ((guile)
+         (if lib-path
+             `(guile -L ,install-dir -L ,lib-path ,file)
+             `(guile -L ,install-dir ,file)))
+        ((kawa)
+         (let ((install-dir (path-resolve install-dir (current-directory))))
+           (if lib-path
+               `(kawa
+                 ,(string-append "-Dkawa.import.path=" install-dir ":"
+                                 (path-resolve lib-path (current-directory)))
+                 --r7rs --script ,file)
+               `(kawa ,(string-append "-Dkawa.import.path=" install-dir)
+                      --r7rs --script ,file))))
+        ((larceny)
+         (if lib-path
+             `(larceny -r7rs -path ,(string-append install-dir ":" lib-path)
+                       -program ,file)
+             `(larceny -r7rs -path ,install-dir -program ,file)))
+        (else
+         #f))))))
 
 (define (get-install-search-dirs impl cfg)
   (let ((install-dir (get-install-source-dir impl cfg))
@@ -1568,6 +1601,7 @@
 (define (get-install-source-dir impl cfg)
   (cond
    ((eq? impl 'chicken) (get-install-library-dir impl cfg))
+   ((eq? impl 'cyclone) (get-install-library-dir impl cfg))
    ((conf-get cfg 'install-source-dir))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "share/snow" impl)))
@@ -1576,6 +1610,7 @@
 (define (get-install-data-dir impl cfg)
   (cond
    ((eq? impl 'chicken) (get-install-library-dir impl cfg))
+   ((eq? impl 'cyclone) (get-install-library-dir impl cfg))
    ((conf-get cfg 'install-data-dir))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "share/snow" impl)))
@@ -1586,9 +1621,13 @@
    ((conf-get cfg 'install-library-dir))
    ((eq? impl 'chicken)
     (cond ((conf-get cfg 'install-prefix)
-           => (lambda (prefix) (make-path prefix "lib" impl 7)))
+           => (lambda (prefix)
+                (make-path prefix "lib" impl
+                           (get-chicken-binary-version cfg))))
           (else
            (car (get-install-dirs impl cfg)))))
+   ((eq? impl 'cyclone)
+    (car (get-install-dirs impl cfg)))
    ((conf-get cfg 'install-prefix)
     => (lambda (prefix) (make-path prefix "lib" impl)))
    (else (make-path "/usr/local/lib" impl))))
@@ -1714,9 +1753,15 @@
          (library-shared-include-files
           impl cfg (make-path dir library-file))))))))
 
+(define (chicken-library-base name)
+  (if (and (= 2 (length name)) (eq? 'srfi (car name)) (integer? (cadr name)))
+      (string-append "srfi-" (number->string (cadr name)))
+      (string-join (map x->string name) ".")))
+
 (define (chicken-installer impl cfg library dir)
   (let* ((library-file (get-library-file cfg library))
-         (library-base (string-join (map x->string (library-name library)) "."))
+         (name (library-name library))
+         (library-base (chicken-library-base name))
          (install-dir (get-install-library-dir impl cfg))
          (so-path (string-append library-base ".so"))
          (imp-path (string-append library-base ".import.scm"))
@@ -1731,15 +1776,31 @@
     (install-file cfg (make-path dir imp-path) dest-imp-path)
     (list dest-so-path dest-imp-path)))
 
+(define (cyclone-installer impl cfg library dir)
+  (let* ((library-file (get-library-file cfg library))
+         (install-dir (get-install-library-dir impl cfg))
+         (so-path (string-append (path-strip-extension library-file) ".so"))
+         (dest-so-path (make-path install-dir so-path))
+         (o-path (string-append (path-strip-extension library-file) ".o"))
+         (dest-o-path (make-path install-dir o-path)))
+    (install-directory cfg (path-directory dest-so-path))
+    (install-file cfg (make-path dir so-path) dest-so-path)
+    (install-file cfg (make-path dir o-path) dest-o-path)
+    (cons dest-o-path
+          (cons dest-so-path
+                (default-installer impl cfg library dir)))))
+
 ;; installers should return the list of installed files
 (define (lookup-installer installer)
   (case installer
     ((chicken) chicken-installer)
+    ((cyclone) cyclone-installer)
     (else default-installer)))
 
 (define (installer-for-implementation impl cfg)
   (case impl
     ((chicken) 'chicken)
+    ((cyclone) 'cyclone)
     (else 'default)))
 
 (define (install-library impl cfg library dir)
@@ -1876,8 +1937,7 @@
 
 (define (chicken-builder impl cfg library dir)
   (let* ((library-file (make-path dir (get-library-file cfg library)))
-         (library-base (string-join (map x->string (library-name library)) "."))
-         (module-name (string-join (map x->string (library-name library)) "."))
+         (library-base (chicken-library-base (library-name library)))
          (so-path (make-path dir (string-append library-base ".so")))
          (imp-path (string-append library-base ".import.scm")))
     (with-directory
@@ -1891,15 +1951,30 @@
                               " - install anyway?"))
               library))))))
 
+(define (cyclone-builder impl cfg library dir)
+  (let* ((library-file (make-path dir (get-library-file cfg library)))
+         (so-path (make-path dir (string-append (path-strip-extension library-file) ".so"))))
+    (with-directory
+     dir
+     (lambda ()
+       (let ((res (system 'cyclone '-o so-path
+                          '-A (path-directory library-file) library-file)))
+         (and (or (and (pair? res) (zero? (cadr res)))
+                  (yes-or-no? cfg "cyclone failed to build: "
+                              (library-name library)
+                              " - install anyway?"))
+              library))))))
+
 (define (lookup-builder builder)
   (case builder
     ((chibi) chibi-builder)
     ((chicken) chicken-builder)
+    ((cyclone) cyclone-builder) 
     (else default-builder)))
 
 (define (builder-for-implementation impl cfg)
   (case impl
-    ((chibi chicken) impl)
+    ((chibi chicken cyclone) impl)
     (else 'default)))
 
 (define (build-library impl cfg library dir)
@@ -1941,14 +2016,28 @@
                               path " - install anyway?"))
               prog))))))
 
+(define (cyclone-program-builder impl cfg prog dir)
+  (let ((path (get-program-file cfg prog)))
+    (with-directory
+     dir
+     (lambda ()
+       (let ((res (system 'cyclone
+                          '-A (path-directory path) path)))
+         (and (or (and (pair? res) (zero? (cadr res)))
+                  (yes-or-no? cfg "cyclone failed to build: "
+                              path " - install anyway?"))
+              prog))))))
+
 (define (lookup-program-builder builder)
   (case builder
     ((chicken) chicken-program-builder)
+    ((cyclone) cyclone-program-builder)
     (else default-program-builder)))
 
 (define (program-builder-for-implementation impl cfg)
   (case impl
     ((chicken) 'chicken)
+    ((cyclone) 'cyclone)
     (else 'default)))
 
 (define (build-program impl cfg prog dir)
@@ -2038,8 +2127,21 @@
      "pkg"
      (lambda (dir preserve)
        (tar-extract snowball (lambda (f) (make-path dir (path-strip-top f))))
-       (let ((libs (filter-map (lambda (lib) (build-library impl cfg lib dir))
-                               (package-libraries pkg))))
+       (let* ((ordered-lib-names
+               (reverse
+                (topological-sort
+                 (map (lambda (lib)
+                        (cons (library-name lib)
+                              (library-dependencies impl cfg lib)))
+                      (package-libraries pkg)))))
+              (ordered-libs
+               (filter-map
+                (lambda (lib-name)
+                  (find (lambda (x) (equal? lib-name (library-name x)))
+                        (package-libraries pkg)))
+                ordered-lib-names))
+              (libs (filter-map (lambda (lib) (build-library impl cfg lib dir))
+                                ordered-libs)))
          (if (test-package impl cfg pkg dir)
              (let* ((data-files
                      (append-map
@@ -2197,6 +2299,11 @@
              impl-cfgs)))
     (for-each
      (lambda (impl cfg pkgs)
+       (when (conf-get cfg 'verbose?)
+         (if (pair? pkgs)
+             (info `(installing packages: ,(map package-name pkgs) for ,impl)))
+         (if (pair? package-files)
+             (info `(installing files: ,package-files for ,impl))))
        ;; install by name and dependency
        (install-for-implementation repo impl cfg pkgs)
        ;; install by file

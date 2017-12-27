@@ -1,14 +1,6 @@
 (define-library (chibi tar-test)
   (export run-tests)
-  (import (chibi)
-          (only (scheme base)
-                bytevector-append
-                make-bytevector
-                string->utf8
-                bytevector
-                open-input-bytevector
-                open-output-bytevector
-                get-output-bytevector)
+  (import (scheme base)
           (chibi tar)
           (chibi test))
   (begin
@@ -47,18 +39,16 @@
           (test "foo" (tar-path x))
           (test 501 (tar-uid x))
           (test "bob" (tar-owner x)))
-        (let ((x (make-tar)))
-          (tar-path-set! x "bar")
-          (tar-mode-set! x #o644)
-          (tar-uid-set! x 501)
-          (tar-gid-set! x 502)
-          (tar-size-set! x 123)
-          (tar-time-set! x 456)
-          (tar-ustar-set! x "ustar")
-          (tar-owner-set! x "john")
-          (tar-group-set! x "john")
+        (let ((x (make-tar "bar" #o644 501 502 123 456 "0")))
           (test "bar" (tar-path x))
-          (test-error (tar-mode-set! x "r"))
+          (test "" (tar-path-prefix x))
+          (tar-owner-set! x "john")
+          (tar-group-set! x "smith")
+          (test "john" (tar-owner x))
+          (test "smith" (tar-group x))
+          (test "bar" (tar-path x))
+          (test "" (tar-path-prefix x))
+          ;;(test-error (tar-mode-set! x "r"))
           (let ((out (open-output-bytevector)))
             (write-tar x out)
             (let ((bv2 (get-output-bytevector out)))

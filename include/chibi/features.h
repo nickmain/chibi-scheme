@@ -285,7 +285,7 @@
 /************************************************************************/
 
 #ifndef SEXP_64_BIT
-#if defined(__amd64) || defined(__x86_64) || defined(_WIN64) || defined(_Wp64) || defined(__LP64__) || defined(__PPC64__)
+#if defined(__amd64) || defined(__x86_64) || defined(_WIN64) || defined(_Wp64) || defined(__LP64__) || defined(__PPC64__) || defined(__mips64__) || defined(__sparc64__)
 #define SEXP_64_BIT 1
 #else
 #define SEXP_64_BIT 0
@@ -342,7 +342,7 @@
 #endif
 
 #ifndef SEXP_USE_DL
-#if defined(PLAN9) || defined(_WIN32)
+#if defined(PLAN9)
 #define SEXP_USE_DL 0
 #else
 #define SEXP_USE_DL ! SEXP_USE_NO_FEATURES
@@ -355,7 +355,11 @@
 
 /* don't include clibs.c - include separately or link */
 #ifndef SEXP_USE_STATIC_LIBS_NO_INCLUDE
-#define SEXP_USE_STATIC_LIBS_NO_INCLUDE defined(PLAN9)
+#ifdef PLAN9
+#define SEXP_USE_STATIC_LIBS_NO_INCLUDE 0
+#else
+#define SEXP_USE_STATIC_LIBS_NO_INCLUDE 1
+#endif
 #endif
 
 #ifndef SEXP_USE_FULL_SOURCE_INFO
@@ -634,7 +638,11 @@
 #endif
 
 #ifndef SEXP_USE_GC_FILE_DESCRIPTORS
-#define SEXP_USE_GC_FILE_DESCRIPTORS (SEXP_USE_AUTOCLOSE_PORTS &&!SEXP_USE_BOEHM && !defined(PLAN9))
+#ifdef PLAN9
+#define SEXP_USE_GC_FILE_DESCRIPTORS 0
+#else
+#define SEXP_USE_GC_FILE_DESCRIPTORS (SEXP_USE_AUTOCLOSE_PORTS &&!SEXP_USE_BOEHM)
+#endif
 #endif
 
 #ifndef SEXP_USE_BIDIRECTIONAL_PORTS
@@ -742,11 +750,15 @@
 #endif
 
 #ifndef SEXP_USE_ALIGNED_BYTECODE
-#if defined(__arm__)
+#if defined(__arm__) || defined(__sparc__) || defined(__sparc64__) || defined(__mips__) || defined(__mips64__)
 #define SEXP_USE_ALIGNED_BYTECODE 1
 #else
 #define SEXP_USE_ALIGNED_BYTECODE 0
 #endif
+#endif
+
+#ifndef SEXP_USE_SIGNED_SHIFTS
+#define SEXP_USE_SIGNED_SHIFTS 0
 #endif
 
 #ifdef PLAN9
@@ -758,15 +770,17 @@
 #define isinf(x) (isInf(x,1) || isInf(x,-1))
 #define isnan(x) isNaN(x)
 #elif defined(_WIN32)
+#define SHUT_RD 0 /* SD_RECEIVE */
+#define SHUT_WR 1 /* SD_SEND */
+#define SHUT_RDWR 2 /* SD_BOTH */
+#ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS 1
 #define _CRT_NONSTDC_NO_DEPRECATE 1
+#define _USE_MATH_DEFINES /* For M_LN10 */
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
 #pragma warning(disable:4146) /* unary minus operator to unsigned type */
-#define strcasecmp lstrcmpi
-#define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)
-#ifdef __MINGW32__
-#include <shlwapi.h>
-#define strcasestr StrStrI
-#else
+#if _MSC_VER < 1900
 #define snprintf(buf, len, fmt, val) sprintf(buf, fmt, val)
 #define strcasecmp lstrcmpi
 #define strncasecmp(s1, s2, n) lstrcmpi(s1, s2)
@@ -774,6 +788,9 @@
 #define trunc(x) floor((x)+0.5*(((x)<0)?1:0))
 #define isnan(x) (x!=x)
 #define isinf(x) (x > DBL_MAX || x < -DBL_MAX)
+#endif
+#elif !defined(__MINGW32__)
+#error Unknown Win32 compiler!
 #endif
 #endif
 
@@ -791,7 +808,7 @@
 #define sexp_nan (0.0/0.0)
 #endif
 
-#ifdef __MINGW32__
+#ifdef _WIN32
 #ifdef BUILDING_DLL
 #define SEXP_API    __declspec(dllexport)
 #else

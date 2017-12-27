@@ -195,6 +195,7 @@
      (margin-note . ,expand-note)
      (example . ,expand-example)
      (example-import . ,expand-example-import)
+     (example-import-only . ,expand-example-import-only)
      )))
 
 ;;> Return a new document environment as in
@@ -206,9 +207,9 @@
 (define (make-module-doc-env mod-name)
   (env-extend (make-default-doc-env)
               '(example-env)
-              (list (environment '(scheme small)
-                                 '(only (chibi) import)
-                                 mod-name))))
+              (list (delay (environment '(scheme small)
+                                        '(only (chibi) import)
+                                        mod-name)))))
 
 (define (section-name tag name)
   (string-strip
@@ -269,7 +270,8 @@
 
 (define (expand-example x env)
   (let ((expr `(begin ,@(sxml->sexp-list x)))
-        (example-env (or (env-ref env 'example-env) (current-environment))))
+        (example-env
+         (force (or (env-ref env 'example-env) (current-environment)))))
     `(div
       ,(expand-codeblock `(,(car x) language: scheme ,@(cdr x)) env)
       (code
@@ -283,7 +285,11 @@
 
 (define (expand-example-import x env)
   (eval `(import ,@(cdr x))
-        (or (env-ref env 'example-env) (current-environment)))
+        (force (or (env-ref env 'example-env) (current-environment))))
+  "")
+
+(define (expand-example-import-only x env)
+  (env-set! env 'example-env (apply environment (cdr x)))
   "")
 
 (define (expand-command sxml env)
@@ -535,29 +541,30 @@ div#footer {padding-bottom: 50px}
                  (lp (cdr ls) (cons (cons (car ls) i) vars) (+ i 1)))
                 (else
                  (extract body vars i)))))
-            (else
-             (let ((opts (map car (sort vars < cdr)))
-                   (rest-var? (contains? x o)))
-               (append (reverse pre)
-                       (cond
-                        ((and (pair? opts) rest-var?)
-                         (list (append opts o)))
-                        (rest-var?
-                         o)
-                        ((pair? opts)
-                         (list opts))
-                        (else
-                         '()))))))))))))
+            (_
+             (let* ((opts (map car (sort vars < cdr)))
+                    (rest-var? (contains? x o))
+                    (tail (cond
+                           ((and (pair? opts) rest-var?)
+                            (list (append opts o)))
+                           (rest-var?
+                            o)
+                           ((pair? opts)
+                            (list opts))
+                           (else
+                            o))))
+               (append (reverse pre) tail))))))))))
 
 (define (get-procedure-signature mod id proc)
-  (cond ((and mod (procedure? proc) (procedure-signature id mod))
-         => (lambda (sig)
-              (list (cons (or id (procedure-name proc)) (cdr sig)))))
-        (else '())))
+  (protect (exn (else '()))
+    (cond ((and mod (procedure? proc) (procedure-signature id mod))
+           => (lambda (sig)
+                (list (cons (or id (procedure-name proc)) (cdr sig)))))
+          (else '()))))
 
 (define (get-value-signature mod id proc name value)
   (match value
-    (('(or let let* letrec letrec*) vars body0 ... body)
+    (((or 'let 'let* 'letrec 'letrec*) vars body0 ... body)
      (get-value-signature mod id proc name body))
     (('lambda args . body)
      (list (cons name (get-optionals-signature args body))))
@@ -898,21 +905,27 @@ div#footer {padding-bottom: 50px}
         (else #f)))
 
 ;; helper for below functions
-(define (extract-module-docs-from-files mod srcs includes stubs strict? exports)
-  (let ((defs (map (lambda (x)
+(define (extract-module-docs-from-files mod srcs includes stubs strict? exports . o)
+  (let ((dir (or (and (pair? o) (car o)) (module-dir mod)))
+        (defs (map (lambda (x)
                      (let ((val (and mod (module-ref mod x))))
                        `(,x ,val ,(object-source val))))
                    exports)))
+    (define (resolve-file file)
+      (let ((res (make-path dir file)))
+        (if (file-exists? res)
+            res
+            file)))
     (append
      (reverse
       (append-map (lambda (x)
-                    (extract-file-docs mod x defs strict? 'module))
+                    (extract-file-docs mod (resolve-file x) defs strict? 'module))
                   srcs))
      (reverse
-      (append-map (lambda (x) (extract-file-docs mod x defs strict?))
+      (append-map (lambda (x) (extract-file-docs mod (resolve-file x) defs strict?))
                   includes))
      (reverse
-      (append-map (lambda (x) (extract-file-docs mod x defs strict? 'ffi))
+      (append-map (lambda (x) (extract-file-docs mod (resolve-file x) defs strict? 'ffi))
                   stubs)))))
 
 ;;> Extract the literate Scribble docs from module \var{mod-name} and
@@ -943,30 +956,55 @@ div#footer {padding-bottom: 50px}
                   (memq (caar forms) '(define-library library))))
         (error "file doesn't define a library" file))
     (let* ((mod-form (car forms))
-           (mod-name (cadr mod-form)))
-      (load file (vector-ref (find-module '(meta)) 1))
-      (let* ((mod (protect (exn (else #f)) (load-module mod-name)))
-             (dir (path-directory file))
-             (resolve (lambda (f) (make-path dir f))))
-        (define (get-forms name)
-          (append-map
-           (lambda (x) (if (and (pair? x) (eq? name (car x))) (cdr x) '()))
-           (cddr mod-form)))
-        (define (get-exports)
-          (if mod (module-exports mod) (get-forms 'exports)))
-        (define (get-decls)
-          (if mod
-              (module-include-library-declarations mod)
-              (map resolve (get-forms 'include-library-declarations))))
-        (define (get-includes)
-          (if mod
-              (module-includes mod)
-              (map resolve (get-forms 'include))))
-        (define (get-shared-includes)
-          (if mod
-              (module-shared-includes mod)
-              (map resolve (get-forms 'shared-include))))
-        (let* ((exports (if (pair? o) (car o) (get-exports)))
-               (srcs (cons file (get-decls))))
-          (extract-module-docs-from-files
-           mod srcs (get-includes) (get-shared-includes) strict? exports))))))
+           (mod-name (cadr mod-form))
+           (lib-dir (module-lib-dir file mod-name))
+           (orig-mod-path (current-module-path))
+           (new-mod-path (cons lib-dir orig-mod-path))
+           (mod (protect (exn (else #f))
+                  (dynamic-wind
+                    (lambda () (current-module-path new-mod-path))
+                    (lambda ()
+                      (let ((mod (load-module mod-name)))
+                        (protect (exn (else #f)) (analyze-module mod-name))
+                        mod))
+                    (lambda () (current-module-path orig-mod-path)))))
+           (dir (path-directory file)))
+      (define (get-forms ls names dir . o)
+        (let ((resolve? (and (pair? o) (car o))))
+          (let lp ((ls ls) (res '()))
+            (if (null? ls)
+                (reverse res)
+                (let ((x (car ls)))
+                  (lp (cdr ls)
+                      (append
+                       (if (and (pair? x) (memq (car x) names))
+                           (map (lambda (y)
+                                  (if (and resolve? (string? y))
+                                      (make-path dir y)
+                                      y))
+                                (reverse (cdr x)))
+                           '())
+                       (if (and (pair? x)
+                                (eq? 'include-library-declarations (car x)))
+                           (append-map
+                            (lambda (inc)
+                              (let* ((file (make-path dir inc))
+                                     (sexps (file->sexp-list file))
+                                     (dir (path-directory file)))
+                                (get-forms sexps names dir resolve?)))
+                            (cdr x))
+                           '())
+                       res)))))))
+      (define (get-exports)
+        (if mod (module-exports mod) (get-forms (cddr mod-form) '(exports) dir)))
+      (define (get-decls)
+        (get-forms (cddr mod-form) '(include-library-declarations) dir #t))
+      (define (get-includes)
+        (get-forms (cddr mod-form) '(include include-ci) dir #t))
+      (define (get-shared-includes)
+        (map (lambda (f) (string-append f ".stub"))
+             (get-forms (cddr mod-form) '(include-shared) dir #t)))
+      (let* ((exports (if (pair? o) (car o) (get-exports)))
+             (srcs (cons file (get-decls))))
+        (extract-module-docs-from-files
+         mod srcs (get-includes) (get-shared-includes) strict? exports)))))

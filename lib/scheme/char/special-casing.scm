@@ -1,10 +1,10 @@
 
-;; Unconditoinal non-1-to-1 case mappings derived from Unicode data
+;; Unconditional non-1-to-1 case mappings derived from Unicode data
 ;; file SpecialCasing.txt.
 
 (define special-cases
-  ;; <code> <lower> <title> <upper>
-  #(#(223 "ß" "Ss" "SS")
+  ;; <code> <lower> <title> <upper> [<fold>]
+  #(#(223 "ß" "Ss" "SS" "ss")
     #(304 "i̇" "İ" "İ")
     #(329 "ŉ" "ʼN" "ʼN")
     #(496 "ǰ" "J̌" "J̌")

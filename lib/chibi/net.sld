@@ -21,6 +21,10 @@
           get-peer-name
           ;; C structs
           sockaddr addrinfo)
-  (import (chibi) (chibi filesystem) (srfi 33))
+  (import (chibi) (chibi filesystem))
+  (cond-expand
+   ((library (srfi 151)) (import (srfi 151)))
+   ((library (srfi 33)) (import (srfi 33)))
+   (else (import (srfi 60))))
   (include-shared "net")
   (include "net.scm"))

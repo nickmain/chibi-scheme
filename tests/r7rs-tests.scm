@@ -237,6 +237,14 @@
                 ((x y) (values a b)))
     (list a b x y))))
 
+(test 'ok (let-values () 'ok))
+
+(test 1 (let ((x 1))
+	  (let*-values ()
+	    (define x 2)
+	    #f)
+	  x))
+
 (let ()
   (define x 0)
   (set! x 5)
@@ -465,6 +473,12 @@
     ((foo _) '_)))
 (test '_ (underscore foo))
 
+(let ()
+  (define-syntax underscore2
+    (syntax-rules ()
+      ((underscore2 (a _) ...) 42)))
+  (test 42 (underscore2 (1 2))))
+
 (define-syntax count-to-2
   (syntax-rules ()
     ((_) 0)
@@ -525,6 +539,31 @@
            (* x x))))))
   (ffoo ff)
   (test 100 (ff 10)))
+
+(let-syntax ((vector-lit
+               (syntax-rules ()
+                 ((vector-lit)
+                  '#(b)))))
+  (test '#(b) (vector-lit)))
+
+(let ()
+  ;; forward hygienic refs
+  (define-syntax foo399
+    (syntax-rules () ((foo399) (bar399))))
+  (define (quux399)
+    (foo399))
+  (define (bar399)
+    42)
+  (test 42 (quux399)))
+
+(let-syntax
+    ((m (syntax-rules ()
+          ((m x) (let-syntax
+                     ((n (syntax-rules (k)
+                           ((n x) 'bound-identifier=?)
+                           ((n y) 'free-identifier=?))))
+                   (n z))))))
+  (test 'bound-identifier=? (m k)))
 
 (test-end)
 
@@ -1281,10 +1320,14 @@
 (test "SSA" (string-upcase "ßa"))
 (test "ßa" (string-downcase "ßa"))
 (test "ssa" (string-downcase "SSA"))
+(test "maß" (string-downcase "Maß"))
+(test "mass" (string-foldcase "Maß"))
 (test "İ" (string-upcase "İ"))
 (test "i\x0307;" (string-downcase "İ"))
 (test "i\x0307;" (string-foldcase "İ"))
 (test "J̌" (string-upcase "ǰ"))
+(test "ſ" (string-downcase "ſ"))
+(test "s" (string-foldcase "ſ"))
 
 ;; context-sensitive (final sigma)
 (test "ΓΛΏΣΣΑ" (string-upcase "γλώσσα"))
@@ -1881,9 +1924,11 @@
 (test "abc" (read-string 3 (open-input-string "abc\ndef\n")))
 
 (let ((in (open-input-string (string #\x10F700 #\x10F701 #\x10F702))))
-  (let* ((c1 (read-char in))
+  (let* ((c0 (peek-char in))
+         (c1 (read-char in))
          (c2 (read-char in))
          (c3 (read-char in)))
+    (test #\x10F700 c0)
     (test #\x10F700 c1)
     (test #\x10F701 c2)
     (test #\x10F702 c3)))
@@ -2302,6 +2347,35 @@
 ;;(test-numeric-syntax "#b10+11i" (make-rectangular 2 3) "2+3i")
 ;;(test-numeric-syntax "#e1.0+1.0i" (make-rectangular 1 1) "1+1i" "1+i")
 ;;(test-numeric-syntax "#i1.0+1.0i" (make-rectangular 1.0 1.0) "1.0+1.0i" "1.+1.i")
+
+(define-syntax test-precision
+  (syntax-rules ()
+    ((test-round-trip str alt ...)
+     (let* ((n (string->number str))
+            (str2 (number->string n))
+            (accepted (list str alt ...))
+            (ls (member str2 accepted)))
+       (test-assert (string-append "(member? " str2 " "
+                                   (let ((out (open-output-string)))
+                                     (write accepted out)
+                                     (get-output-string out))
+                                   ")")
+         (pair? ls))
+       (when (pair? ls)
+         (test-assert (string-append "(eqv?: " str " " str2 ")")
+           (eqv? n (string->number (car ls)))))))))
+
+(test-precision "-1.7976931348623157e+308" "-inf.0")
+(test-precision "4.940656458412465e-324" "4.94065645841247e-324" "5.0e-324" "0.0")
+(test-precision "9.881312916824931e-324" "9.88131291682493e-324" "1.0e-323" "0.0")
+(test-precision "1.48219693752374e-323" "1.5e-323" "0.0")
+(test-precision "1.976262583364986e-323" "1.97626258336499e-323" "2.0e-323" "0.0")
+(test-precision "2.470328229206233e-323" "2.47032822920623e-323" "2.5e-323" "0.0")
+(test-precision "2.420921664622108e-322" "2.42092166462211e-322" "2.4e-322" "0.0")
+(test-precision "2.420921664622108e-320" "2.42092166462211e-320" "2.421e-320" "0.0")
+(test-precision "1.4489974452386991" "1.4489975")
+(test-precision "0.14285714285714282" "0.14285714285714288" "0.14285715")
+(test-precision "1.7976931348623157e+308" "+inf.0")
 
 (test-end)
 

@@ -42,7 +42,7 @@
    (string-find str pred (string-index->cursor str i))))
 
 (define (try-fitted2 proc fail)
-  (fn (width string-width output)
+  (fn (width output)
     (let ((out (open-output-string)))
       (call-with-current-continuation
        (lambda (abort)
@@ -53,7 +53,7 @@
            (fn (col)
              (let lp ((i 0) (col col))
                (let ((nli (string-find/index str #\newline i))
-                     (len (string-width str)))
+                     (len (string-length str)))
                  (if (< nli len)
                      (if (> (+ (- nli i) col) width)
                          (abort fail)
@@ -244,28 +244,28 @@
    (fn (col width string-width)
      (let ((avail (- width col)))
        (cond
-        ;; ((and (pair? (cdr ls)) (pair? (cddr ls)) (pair? (cdr (cddr ls)))
-        ;;       (fits-in-columns width ls (lambda (x) (pp-flat x pp shares))))
-        ;;  => (lambda (ls)
-        ;;       ;; at least four elements which can be broken into columns
-        ;;       (let* ((prefix (make-nl-space col))
-        ;;              (widest (+ 1 (car ls)))
-        ;;              (columns (quotient width widest))) ; always >= 2
-        ;;         (let lp ((ls (cdr ls)) (i 1))
-        ;;           (cond
-        ;;            ((null? ls)
-        ;;             nothing)
-        ;;            ((null? (cdr ls))
-        ;;             (displayed (car ls)))
-        ;;            ((>= i columns)
-        ;;             (each (car ls)
-        ;;                   prefix
-        ;;                   (fn () (lp (cdr ls) 1))))
-        ;;            (else
-        ;;             (let ((pad (- widest (string-width (car ls)))))
-        ;;               (each (car ls)
-        ;;                     (make-space pad)
-        ;;                     (lp (cdr ls) (+ i 1))))))))))
+        ((and (pair? (cdr ls)) (pair? (cddr ls)) (pair? (cdr (cddr ls)))
+              (fits-in-columns width ls (lambda (x) (pp-flat x pp shares))))
+         => (lambda (ls)
+              ;; at least four elements which can be broken into columns
+              (let* ((prefix (make-nl-space col))
+                     (widest (+ 1 (car ls)))
+                     (columns (quotient width widest))) ; always >= 2
+                (let lp ((ls (cdr ls)) (i 1))
+                  (cond
+                   ((null? ls)
+                    nothing)
+                   ((null? (cdr ls))
+                    (displayed (car ls)))
+                   ((>= i columns)
+                    (each (car ls)
+                          prefix
+                          (fn () (lp (cdr ls) 1))))
+                   (else
+                    (let ((pad (- widest (string-width (car ls)))))
+                      (each (car ls)
+                            (make-space pad)
+                            (lp (cdr ls) (+ i 1))))))))))
         (else
          ;; no room, print one per line
          (joined/shares pp ls shares (make-nl-space col))))))

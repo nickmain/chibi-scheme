@@ -5,10 +5,15 @@
 #include <chibi/eval.h>
 
 #ifndef PLAN9
+#include <stdlib.h>
 #include <errno.h>
 #endif
 
 #ifdef _WIN32
+#if defined(__MINGW32__) || defined(__MINGW64__)
+/* Workaround MinGW header implementation */
+errno_t getenv_s(size_t*, char*, size_t, const char*);
+#endif
 int setenv(const char *name, const char *value, int overwrite)
 {
   int errcode = 0;
@@ -91,6 +96,11 @@ sexp sexp_get_procedure_arity (sexp ctx, sexp self, sexp_sint_t n, sexp proc) {
 sexp sexp_get_procedure_variadic_p (sexp ctx, sexp self, sexp_sint_t n, sexp proc) {
   sexp_assert_type(ctx, sexp_procedurep, SEXP_PROCEDURE, proc);
   return sexp_make_boolean(sexp_procedure_variadic_p(proc));
+}
+
+sexp sexp_get_procedure_flags (sexp ctx, sexp self, sexp_sint_t n, sexp proc) {
+  sexp_assert_type(ctx, sexp_procedurep, SEXP_PROCEDURE, proc);
+  return sexp_make_fixnum(sexp_procedure_flags(proc));
 }
 
 sexp sexp_get_opcode_name (sexp ctx, sexp self, sexp_sint_t n, sexp op) {
@@ -306,12 +316,31 @@ sexp sexp_type_printer_op (sexp ctx, sexp self, sexp_sint_t n, sexp t) {
   return sexp_type_print(t) ? sexp_type_print(t) : SEXP_FALSE;
 }
 
+sexp sexp_type_printer_set_op (sexp ctx, sexp self, sexp_sint_t n, sexp t, sexp p) {
+  sexp_assert_type(ctx, sexp_typep, SEXP_TYPE, t);
+  sexp_assert_type(ctx, sexp_applicablep, SEXP_PROCEDURE, p);
+  sexp_type_print(t) = p;
+  return SEXP_VOID;
+}
+
 sexp sexp_object_size (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
   sexp t;
   if ((! sexp_pointerp(x)) || (sexp_pointer_tag(x) >= sexp_context_num_types(ctx)))
     return SEXP_ZERO;
   t = sexp_object_type(ctx, x);
   return sexp_make_fixnum(sexp_type_size_of_object(t, x));
+}
+
+sexp sexp_immutablep_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+  return sexp_pointerp(x) ? sexp_make_boolean(sexp_immutablep(x)) : SEXP_TRUE;
+}
+
+sexp sexp_make_immutable_op (sexp ctx, sexp self, sexp_sint_t n, sexp x) {
+  if (sexp_pointerp(x)) {
+    sexp_immutablep(x) = 1;
+    return SEXP_TRUE;
+  }
+  return SEXP_FALSE;
 }
 
 sexp sexp_integer_to_immediate (sexp ctx, sexp self, sexp_sint_t n, sexp i, sexp dflt) {
@@ -643,6 +672,7 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_foreign(ctx, env, "procedure-vars", 1, sexp_get_procedure_vars);
   sexp_define_foreign(ctx, env, "procedure-arity", 1, sexp_get_procedure_arity);
   sexp_define_foreign(ctx, env, "procedure-variadic?", 1, sexp_get_procedure_variadic_p);
+  sexp_define_foreign(ctx, env, "procedure-flags", 1, sexp_get_procedure_flags);
   sexp_define_foreign(ctx, env, "copy-lambda", 1, sexp_copy_lambda);
   sexp_define_foreign_opt(ctx, env, "make-lambda", 4, sexp_make_lambda_op, SEXP_NULL);
   sexp_define_foreign_opt(ctx, env, "make-cnd", 3, sexp_make_cnd_op, SEXP_VOID);
@@ -671,6 +701,7 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_foreign(ctx, env, "type-slots", 1, sexp_type_slots_op);
   sexp_define_foreign(ctx, env, "type-num-slots", 1, sexp_type_num_slots_op);
   sexp_define_foreign(ctx, env, "type-printer", 1, sexp_type_printer_op);
+  sexp_define_foreign(ctx, env, "type-printer-set!", 2, sexp_type_printer_set_op);
   sexp_define_foreign(ctx, env, "env-parent-set!", 2, sexp_env_parent_set_op);
   sexp_define_foreign(ctx, env, "env-lambda", 1, sexp_env_lambda_op);
   sexp_define_foreign(ctx, env, "env-lambda-set!", 2, sexp_env_lambda_set_op);
@@ -680,6 +711,8 @@ sexp sexp_init_library (sexp ctx, sexp self, sexp_sint_t n, sexp env, const char
   sexp_define_foreign(ctx, env, "env-push!", 3, sexp_env_push_op);
   sexp_define_foreign(ctx, env, "core-code", 1, sexp_core_code_op);
   sexp_define_foreign(ctx, env, "object-size", 1, sexp_object_size);
+  sexp_define_foreign(ctx, env, "immutable?", 1, sexp_immutablep_op);
+  sexp_define_foreign(ctx, env, "make-immutable!", 1, sexp_make_immutable_op);
   sexp_define_foreign_opt(ctx, env, "integer->immediate", 2, sexp_integer_to_immediate, SEXP_FALSE);
   sexp_define_foreign_opt(ctx, env, "object->integer", 1, sexp_object_to_integer, SEXP_FALSE);
   sexp_define_foreign(ctx, env, "gc", 0, sexp_gc_op);

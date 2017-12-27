@@ -475,7 +475,7 @@ static void generate_general_app (sexp ctx, sexp app) {
   sexp_generate(ctx, 0, 0, 0, sexp_car(app));
 
   /* maybe overwrite the current frame */
-  sexp_emit(ctx, (tailp ? SEXP_OP_TAIL_CALL : SEXP_OP_CALL));
+  sexp_emit(ctx, ((tailp && sexp_not(sexp_global(ctx, SEXP_G_NO_TAIL_CALLS_P))) ? SEXP_OP_TAIL_CALL : SEXP_OP_CALL));
   sexp_emit_word(ctx, (sexp_uint_t)sexp_make_fixnum(len));
 
   sexp_context_tailp(ctx) = (char)tailp;
@@ -1326,8 +1326,16 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     break;
   case SEXP_OP_GLOBAL_REF:
     _ALIGN_IP();
-    if (sexp_cdr(_WORD0) == SEXP_UNDEF)
-      sexp_raise("undefined variable", sexp_list1(ctx, sexp_car(_WORD0)));
+    if (sexp_cdr(_WORD0) == SEXP_UNDEF) {
+      /* handle renamed forward references by doing a final delayed */
+      /* lookup before throwing an undefined variable error */
+      if (sexp_synclop(sexp_car(_WORD0))) {
+        tmp1 = sexp_env_cell(ctx, sexp_synclo_env(sexp_car(_WORD0)), sexp_synclo_expr(sexp_car(_WORD0)), 0);
+        if (tmp1 != NULL) _WORD0 = tmp1;
+      }
+      if (sexp_cdr(_WORD0) == SEXP_UNDEF)
+        sexp_raise("undefined variable", sexp_list1(ctx, sexp_car(_WORD0)));
+    }
     /* ... FALLTHROUGH ... */
   case SEXP_OP_GLOBAL_KNOWN_REF:
     _ALIGN_IP();
@@ -2073,7 +2081,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
 #endif
     if (i == EOF) {
       if (!sexp_port_openp(_ARG1))
-        sexp_raise("peek-char: port is closed", _ARG1);
+        sexp_raise("read-char: port is closed", _ARG1);
       else
 #if SEXP_USE_GREEN_THREADS
       if ((sexp_port_stream(_ARG1) ? ferror(sexp_port_stream(_ARG1)) : 1)
@@ -2105,7 +2113,7 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     i = sexp_read_char(ctx, _ARG1);
     if (i == EOF) {
       if (!sexp_port_openp(_ARG1))
-        sexp_raise("read-char: port is closed", _ARG1);
+        sexp_raise("peek-char: port is closed", _ARG1);
       else
 #if SEXP_USE_GREEN_THREADS
       if ((sexp_port_stream(_ARG1) ? ferror(sexp_port_stream(_ARG1)) : 1)
@@ -2120,6 +2128,12 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
       } else
 #endif
         _ARG1 = SEXP_EOF;
+#if SEXP_USE_UTF8_STRINGS
+    } else if (i >= 0x80) {
+      tmp1 = sexp_read_utf8_char(ctx, _ARG1, i);
+      sexp_push_utf8_char(ctx, sexp_unbox_character(tmp1), _ARG1);
+      _ARG1 = tmp1;
+#endif
     } else {
       sexp_push_char(ctx, i, _ARG1);
       _ARG1 = sexp_make_character(i);

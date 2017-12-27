@@ -39,6 +39,7 @@ void sexp_usage(int err) {
          "  -q           - \"quick\" load, use the core -xchibi language\n"
          "  -Q           - extra \"quick\" load, -xchibi.primitive\n"
          "  -V           - print version information\n"
+         "  -D <feature> - add <feature> to the list of features\n"
 #if ! SEXP_USE_BOEHM
          "  -h <size>    - specify the initial heap size\n"
 #endif
@@ -52,6 +53,8 @@ void sexp_usage(int err) {
          "  -p <expr>    - evaluate and print an expression\n"
          "  -r[<main>]   - run a SRFI-22 main\n"
          "  -R[<module>] - run main from a module\n"
+         "  -t <module.proc> - trace a procedure\n"
+         "  -T           - disable TCO (dangerous)\n"
 #if SEXP_USE_IMAGE_LOADING
          "  -d <file>    - dump an image file and exit\n"
          "  -i <file>    - load an image file\n"
@@ -90,6 +93,8 @@ static void sexp_make_unblocking (sexp ctx, sexp port) {
     if (fcntl(sexp_port_fileno(port), F_SETFL, sexp_port_flags(port) | O_NONBLOCK) == 0)
       sexp_port_flags(port) |= O_NONBLOCK;
 }
+#else
+#define sexp_make_unblocking(ctx, port) (void)0
 #endif
 
 static sexp sexp_meta_env (sexp ctx) {
@@ -103,15 +108,15 @@ static sexp sexp_param_ref (sexp ctx, sexp env, sexp name) {
   return sexp_opcodep(res) ? sexp_parameter_ref(ctx, res) : NULL;
 }
 
-static sexp sexp_load_standard_params (sexp ctx, sexp e) {
+static sexp sexp_load_standard_params (sexp ctx, sexp e, int nonblocking) {
   sexp_gc_var1(res);
   sexp_gc_preserve1(ctx, res);
   sexp_load_standard_ports(ctx, e, stdin, stdout, stderr, 0);
-#if SEXP_USE_GREEN_THREADS
-  sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_IN_SYMBOL)));
-  sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL)));
-  sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_ERR_SYMBOL)));
-#endif
+  if (nonblocking) {
+    sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_IN_SYMBOL)));
+    sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_OUT_SYMBOL)));
+    sexp_make_unblocking(ctx, sexp_param_ref(ctx, e, sexp_global(ctx, SEXP_G_CUR_ERR_SYMBOL)));
+  }
   res = sexp_make_env(ctx);
   sexp_env_parent(res) = e;
   sexp_context_env(ctx) = res;
@@ -236,7 +241,7 @@ static sexp sexp_add_import_binding (sexp ctx, sexp env) {
   return env;
 }
 
-static sexp sexp_load_standard_repl_env (sexp ctx, sexp env, sexp k, int bootp) {
+static sexp sexp_load_standard_repl_env (sexp ctx, sexp env, sexp k, int bootp, int nonblocking) {
   sexp_gc_var1(e);
   sexp_gc_preserve1(ctx, e);
   e = sexp_load_standard_env(ctx, env, k);
@@ -248,7 +253,7 @@ static sexp sexp_load_standard_repl_env (sexp ctx, sexp env, sexp k, int bootp) 
       sexp_add_import_binding(ctx, e);
 #endif
     if (!sexp_exceptionp(e))
-      e = sexp_load_standard_params(ctx, e);
+      e = sexp_load_standard_params(ctx, e, nonblocking);
   }
   sexp_gc_release1(ctx);
   return e;
@@ -279,7 +284,7 @@ static void do_init_context (sexp* ctx, sexp* env, sexp_uint_t heap_size,
 
 #define load_init(bootp) if (! init_loaded++) do {                      \
       init_context();                                                   \
-      check_exception(ctx, env=sexp_load_standard_repl_env(ctx, env, SEXP_SEVEN, bootp)); \
+      check_exception(ctx, env=sexp_load_standard_repl_env(ctx, env, SEXP_SEVEN, bootp, nonblocking)); \
     } while (0)
 
 /* static globals for the sake of resuming from within emscripten */
@@ -295,12 +300,24 @@ sexp run_main (int argc, char **argv) {
   char *arg;
   const char *prefix=NULL, *suffix=NULL, *main_symbol=NULL, *main_module=NULL;
   sexp_sint_t i, j, c, quit=0, print=0, init_loaded=0, mods_loaded=0,
-    fold_case=SEXP_DEFAULT_FOLD_CASE_SYMS;
+    fold_case=SEXP_DEFAULT_FOLD_CASE_SYMS, nonblocking=0;
   sexp_uint_t heap_size=0, heap_max_size=SEXP_MAXIMUM_HEAP_SIZE;
   sexp out=SEXP_FALSE, ctx=NULL, ls;
   sexp_gc_var4(tmp, sym, args, env);
   args = SEXP_NULL;
   env = NULL;
+
+  /* SRFI 22: invoke `main` procedure by default if the interpreter is */
+  /* invoked as `scheme-r7rs`. */
+  arg = strrchr(argv[0], '/');
+  if (strncmp((arg == NULL ? argv[0] : arg + 1), "scheme-r7rs", strlen("scheme-r7rs")) == 0) {
+    main_symbol = "main";
+    /* skip option parsing since we can't pass `--` before the name of script */
+    /* to avoid misinterpret the name as options when the interpreter is */
+    /* executed via `#!/usr/env/bin scheme-r7rs` shebang.  */
+    i = 1;
+    goto done_options;
+  }
 
   /* parse options */
   for (i=1; i < argc && argv[i][0] == '-'; i++) {
@@ -396,6 +413,11 @@ sexp run_main (int argc, char **argv) {
       check_nonull_arg('I', arg);
       sexp_add_module_directory(ctx, tmp=sexp_c_string(ctx,arg,-1), SEXP_FALSE);
       break;
+#if SEXP_USE_GREEN_THREADS
+    case 'b':
+      nonblocking = 1;
+      break;
+#endif
     case '-':
       if (argv[i][2] == '\0') {
         i++;
@@ -423,12 +445,13 @@ sexp run_main (int argc, char **argv) {
       }
       ctx = sexp_load_image(arg, 0, heap_size, heap_max_size);
       if (!ctx || !sexp_contextp(ctx)) {
-        fprintf(stderr, "-:i <file>: couldn't open file for reading: %s\n", arg);
+        fprintf(stderr, "-:i <file>: couldn't open image file for reading: %s\n", arg);
         fprintf(stderr, "            %s\n", sexp_load_image_err());
-        exit_failure();
+        ctx = NULL;
+      } else {
+        env = sexp_load_standard_params(ctx, sexp_context_env(ctx), nonblocking);
+        init_loaded++;
       }
-      env = sexp_load_standard_params(ctx, sexp_context_env(ctx));
-      init_loaded++;
       break;
     case 'd':
       if (! init_loaded++) {
@@ -471,6 +494,10 @@ sexp run_main (int argc, char **argv) {
       break;
     case 's':
       init_context(); sexp_global(ctx, SEXP_G_STRICT_P) = SEXP_TRUE;
+      handle_noarg();
+      break;
+    case 'T':
+      init_context(); sexp_global(ctx, SEXP_G_NO_TAIL_CALLS_P) = SEXP_TRUE;
       handle_noarg();
       break;
     case 't':
@@ -586,7 +613,7 @@ sexp run_main (int argc, char **argv) {
         sym = sexp_intern(ctx, main_symbol, -1);
         tmp = sexp_env_ref(ctx, env, sym, SEXP_FALSE);
         if (sexp_procedurep(tmp)) {
-          args = sexp_list1(ctx, args);
+          args = sexp_list1(ctx, sexp_cdr(args));
           check_exception(ctx, sexp_apply(ctx, tmp, args));
         } else {
           fprintf(stderr, "couldn't find main binding: %s in %s\n", main_symbol, main_module ? main_module : argv[i]);

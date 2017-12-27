@@ -176,7 +176,8 @@
              (warning "error in group outside of tests")
              (print-exception exn (current-error-port))
              (test-group-inc! (current-test-group) 'count)
-             (test-group-inc! (current-test-group) 'ERROR)))
+             (test-group-inc! (current-test-group) 'ERROR)
+             (test-failure-count (+ 1 (test-failure-count)))))
          body ...)
        (test-end name)
        (current-test-group old-group)))))
@@ -421,7 +422,7 @@
     (else (lambda (x) x))))
 
 (define (test-status-message status)
-  ((test-status-color status) status))
+  ((test-status-color status) (symbol->string status)))
 
 (define (test-status-code status)
   ((test-status-color status)
@@ -726,7 +727,7 @@
 (define current-test-verbosity
   (make-parameter
    (cond ((get-environment-variable "TEST_VERBOSE")
-          => (lambda (s) (not (member s "" "0"))))
+          => (lambda (s) (not (member s '("" "0")))))
          (else #f))))
 (define current-test-epsilon (make-parameter 1e-5))
 (define current-test-comparator (make-parameter test-equal?))

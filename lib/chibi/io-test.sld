@@ -19,6 +19,14 @@
                   (set! str-ls (cdr str-ls))
                   res)))))
 
+      (define (bytevectors->input-port bv-ls)
+        (make-generated-binary-input-port
+         (lambda ()
+           (and (pair? bv-ls)
+                (let ((res (car bv-ls)))
+                  (set! bv-ls (cdr bv-ls))
+                  res)))))
+
       (test-begin "io")
 
       (test "input-string-port" 1025
@@ -126,12 +134,38 @@
             (read-string 4096 in)
             (read-line in)))
 
+      (test #u8(0 1 2)
+        (let ((in (bytevectors->input-port (list #u8(0 1 2)))))
+          (read-bytevector 3 in)))
+
+      (test #u8(0 1 2 3 4 5)
+        (let ((in (bytevectors->input-port (list #u8(0 1 2) #u8(3 4 5)))))
+          (read-bytevector 6 in)))
+
+      (test #u8(3 4 5)
+        (let ((in (bytevectors->input-port
+                   (list #u8(0 1 2) (make-bytevector 4087 7) #u8(3 4 5)))))
+          (read-bytevector 4090 in)
+          (read-bytevector 3 in)))
+
+      (test #u8(3 4 5)
+        (let ((in (bytevectors->input-port
+                   (list #u8(0 1 2) (make-bytevector 4093 7) #u8(3 4 5)))))
+          (read-bytevector 4096 in)
+          (read-bytevector 3 in)))
+
+      (test #u8(3 4 5)
+        (let ((in (bytevectors->input-port
+                   (list #u8(0 1 2) (make-bytevector 5000 7) #u8(3 4 5)))))
+          (read-bytevector 5003 in)
+          (read-bytevector 3 in)))
+
       (let ((in (make-custom-binary-input-port
                  (let ((i 0))
                    (lambda (bv start end)
                      (do ((j start (+ j 1)))
                          ((= j end))
-                       (bytevector-u8-set! bv j (modulo (+ j i) 256)))
+                       (bytevector-u8-set! bv j (modulo (- (+ j i) start) 256)))
                      (if (> end 0)
                          (set! i (bytevector-u8-ref bv (- end 1))))
                      (- end start))))))

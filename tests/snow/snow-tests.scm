@@ -14,8 +14,8 @@
 (create-directory install-prefix)
 
 ;; setup chicken install directory with minimum required modules
-(define chicken-lib-dir "/usr/local/lib/chicken/7")
-(define chicken-install-dir (make-path install-prefix "lib/chicken/7"))
+(define chicken-lib-dir "/usr/local/lib/chicken/8")
+(define chicken-install-dir (make-path install-prefix "lib/chicken/8"))
 (create-directory* chicken-install-dir)
 (if (file-exists? chicken-lib-dir)
     (let ((rx-required
@@ -40,7 +40,9 @@
 ;; run snow-chibi command as a separate process with test defaults
 (define chibi-path "./chibi-scheme")
 (define (snow-command . args)
+  ;;(write `(snow ,@args)) (newline)
   `("./tools/snow-chibi"
+    --verbose
     --always-no
     --implementations "chibi"
     --chibi-path ,(string-append chibi-path " -A" install-libdir)
@@ -188,13 +190,20 @@
       --description "Pythagoran Theorem"
       --test "tests/snow/repo3/pythagoras/hypotenuse-test.sch"
       tests/snow/repo3/pythagoras/hypotenuse.sch)
+(snow package --output-dir tests/snow/repo3/
+      --version 1.0 --authors "Seki Takakazu"
+      --description "Bernoulli Numbers"
+      --test "tests/snow/repo3/takakazu/bernoulli-test.scm"
+      tests/snow/repo3/takakazu/bernoulli.sld)
 (snow index ,(cadr repo3))
 (snow ,@repo3 install pingala.binomial)
 (snow ,@repo3 install euler.totient)
+(snow ,@repo3 install takakazu.bernoulli)
 (let ((status (snow-status)))
   (test-assert (installed-version status '(pingala binomial)))
   (test-assert (installed-version status '(pingala factorial)))
-  (test "2.7.1" (installed-version status '(euler totient))))
+  (test "2.7.1" (installed-version status '(euler totient)))
+  (test-assert (installed-version status '(takakazu bernoulli))))
 
 ;; programs
 (snow ,@repo3 install pingala.triangle)
@@ -279,6 +288,8 @@
 
 (snow ,@repo4 package --output-dir tests/snow/repo4/
       tests/snow/repo4/euler/interest.sld)
+(snow ,@repo4 package --output-dir tests/snow/repo4/
+      tests/snow/repo4/euler/exponential.sld)
 (snow index ,(cadr repo4))
 (let* ((pkg-file "tests/snow/repo4/euler-interest-2.3.tgz")
        (pkg (package-file-meta pkg-file))
@@ -294,6 +305,21 @@
   (test '((import (rename (euler interest-test)
                           (run-tests run-euler-interest-test-tests)))
           (run-euler-interest-test-tests))
+      (snowball-test->sexp-list pkg pkg-file)))
+(let* ((pkg-file "tests/snow/repo4/euler-exponential-2.3.tgz")
+       (pkg (package-file-meta pkg-file))
+       (libs (package-libraries pkg)))
+  (test 2 (length libs))
+  (for-each
+   (lambda (lib)
+     (test "Leonhard Euler" (assoc-get lib 'author)))
+   libs)
+  (test 'bsd (assoc-get pkg 'license))
+  (test "Library for computing the natural exponential function."
+      (assoc-get pkg 'description))
+  (test '((import (rename (euler exponential-test)
+                          (run-tests run-euler-exponential-test-tests)))
+          (run-euler-exponential-test-tests))
       (snowball-test->sexp-list pkg pkg-file)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

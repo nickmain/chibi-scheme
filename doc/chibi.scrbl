@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
   sexp ctx;
   ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
   sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
-  sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 0);
+  sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 1);
   dostuff(ctx);
   sexp_destroy_context(ctx);
 }
@@ -441,6 +441,11 @@ using only the parent.
 
 Otherwise, a new heap is allocated with \var{size} bytes, expandable to a
 maximum of \var{max_size} bytes, using the system defaults if either is 0.
+
+Note this context is not a malloced pointer (it resides inside a
+malloced heap), and therefore can't be passed to \ccode{free()},
+or stored in a C++ smart pointer.  It can only be reclaimed with
+\ccode{sexp_destroy_context}.
 }}
 
 \item{\ccode{sexp_make_eval_context(sexp ctx, sexp stack, sexp env, sexp_uint_t size, sexp_uint_t max_size)}
@@ -472,7 +477,8 @@ the default context environment is used.  Any of the \ctype{FILE*} may
 be \cvar{NULL}, in which case the corresponding port is not set.  If
 \var{leave_open} is true, then the underlying \ctype{FILE*} is left
 open after the Scheme port is closed, otherwise they are both closed
-together.
+together.  If you want to reuse these streams from other vms, or from
+C, you should specify leave_open.
 }}
 
 \item{\ccode{sexp_load(sexp ctx, sexp file, sexp env)}
@@ -1159,7 +1165,8 @@ A number of SRFIs are provided in the default installation.  Note that
 SRFIs 0, 6, 23, 46 and 62 are built into the default environment so
 there's no need to import them.  SRFI 22 is available with the "-r"
 command-line option.  This list includes popular SRFIs or SRFIs used
-in standard Chibi modules
+in standard Chibi modules (many other SRFIs are available on
+snow-fort):
 
 \itemlist[
 
@@ -1170,6 +1177,7 @@ in standard Chibi modules
 \item{\hyperlink["http://srfi.schemers.org/srfi-8/srfi-8.html"]{(srfi 8)  - receive}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-9/srfi-9.html"]{(srfi 9)  - define-record-type}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-11/srfi-11.html"]{(srfi 11) - let-values/let*-values}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-11/srfi-14.html"]{(srfi 14) - character-set library}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-16/srfi-16.html"]{(srfi 16) - case-lambda}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-18/srfi-18.html"]{(srfi 18) - multi-threading support}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-22/srfi-22.html"]{(srfi 22) - running scheme scripts on Unix}}
@@ -1186,6 +1194,27 @@ in standard Chibi modules
 \item{\hyperlink["http://srfi.schemers.org/srfi-95/srfi-95.html"]{(srfi 95) - sorting and merging}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-98/srfi-98.html"]{(srfi 98) - environment access}}
 \item{\hyperlink["http://srfi.schemers.org/srfi-99/srfi-99.html"]{(srfi 99) - ERR5RS records}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-111/srfi-111.html"]{(srfi 111) - boxes}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-113/srfi-113.html"]{(srfi 113) - sets and bags}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-115/srfi-115.html"]{(srfi 115) - Scheme regular expressions}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-116/srfi-116.html"]{(srfi 116) - immutable list library}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-117/srfi-117.html"]{(srfi 117) - mutable queues}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-121/srfi-121.html"]{(srfi 121) - generators}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-124/srfi-124.html"]{(srfi 124) - ephemerons}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-125/srfi-125.html"]{(srfi 125) - intermediate hash tables}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-128/srfi-128.html"]{(srfi 128) - comparators (reduced)}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-129/srfi-129.html"]{(srfi 129) - titlecase procedures}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-130/srfi-130.html"]{(srfi 130) - cursor-based string library}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-132/srfi-132.html"]{(srfi 132) - sort libraries}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-133/srfi-133.html"]{(srfi 133) - vector library}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-139/srfi-139.html"]{(srfi 139) - syntax parameters}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-141/srfi-141.html"]{(srfi 141) - integer division}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-143/srfi-143.html"]{(srfi 143) - fixnums}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-144/srfi-144.html"]{(srfi 144) - flonums}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-145/srfi-145.html"]{(srfi 145) - assumptions}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-147/srfi-147.html"]{(srfi 147) - custom macro transformers}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-151/srfi-151.html"]{(srfi 151) - bitwise operators}}
+\item{\hyperlink["http://srfi.schemers.org/srfi-154/srfi-154.html"]{(srfi 154) - first-class dynamic extents}}
 
 ]
 
@@ -1260,8 +1289,12 @@ Beyond the distributed modules, Chibi comes with a package manager
 based on \hyperlink["http://trac.sacrideo.us/wg/wiki/Snow"]{Snow2}
 which can be used to share R7RS libraries.  Packages are distributed
 as tar gzipped files called "snowballs," and may contain multiple
-libraries.  The program is installed as \scheme{snow-chibi} and takes
-the following subcommands:
+libraries.  The program is installed as \scheme{snow-chibi}.  The
+"help" subcommand can be used to list all subcommands and options.
+Note by default \scheme{snow-chibi} uses an image file to speed-up
+loading (since it loads many libraries) - if you have any difficulties
+with image files on your platform you can run
+\command{snow-chibi --noimage} to disable this feature.
 
 \subsubsection{Querying Packages and Status}
 
