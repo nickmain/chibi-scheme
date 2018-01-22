@@ -14,6 +14,12 @@ The (scheme time) module includes code for handling leap seconds
 from Alan Watson's Scheme clock library at
 http://code.google.com/p/scheme-clock/ under the same license.
 
+The following distributed SRFIs use the reference implementations:
+
+  (srfi 101) is adapted from David van Horn's implementation
+  (srfi 134) is Shiro Kawai's implementation
+  (srfi 135) is Will Clinger's implementation
+
 The benchmarks are based on the Racket versions of the classic
 Gabriel benchmarks from
 http://www.cs.utah.edu/~mflatt/benchmarks-20100126/log3/index.html.

@@ -11,10 +11,10 @@
 
 (define-environment-monad Show-Env
   (sequence: sequence)
-  (bind: fn)
+  (bind: %fn)
   (bind-fork: fn-fork)
   (local: %with)
-  (local!: update!)
+  (local!: with!)
   (return: return)
   (run: run)
   (fields:
@@ -31,6 +31,11 @@
    (ellipsis env-ellipsis env-ellipsis-set!)
    (writer env-writer env-writer-set!)
    (output env-output env-output-set!)))
+
+(define-syntax fn
+  (syntax-rules ()
+    ((fn vars expr ... fmt)
+     (%fn vars expr ... (displayed fmt)))))
 
 ;; The base formatting handles outputting raw strings and a simple,
 ;; configurable handler for formatting objects.
@@ -70,26 +75,26 @@
 
 ;; Run with an output port with initial default values.
 (define (show-run out proc)
-  (run (sequence (update! (port out)
-                          (col 0)
-                          (row 0)
-                          (width 78)
-                          (radix 10)
-                          (pad-char #\space)
-                          (output output-default)
-                          (string-width substring-length))
+  (run (sequence (with! (port out)
+                        (col 0)
+                        (row 0)
+                        (width 78)
+                        (radix 10)
+                        (pad-char #\space)
+                        (output output-default)
+                        (string-width substring-length))
                  proc)))
 
 ;;> Temporarily bind the parameters in the body \var{x}.
 
 (define-syntax with
   (syntax-rules ()
-    ((with params x ... y) (%with params x ... (fn () (displayed y))))
-    ))
+    ((with params x ... y)
+     (%with params (each x ... y)))))
 
 ;;> The noop formatter.  Generates no output and leaves the state
 ;;> unmodified.
-(define nothing (fn () (update!)))
+(define nothing (fn () (with!)))
 
 ;;> Formats a displayed version of x - if a string or char, outputs the
 ;;> raw characters (as with `display'), if x is already a formatter
@@ -126,9 +131,9 @@
     (display str port)
     (let ((nl-index (string-find-right str #\newline)))
       (if (string-cursor>? nl-index (string-cursor-start str))
-          (update! (row (+ row (string-count str #\newline)))
-                   (col (string-width str (string-cursor->index str nl-index))))
-          (update! (col (+ col (string-width str))))))))
+          (with! (row (+ row (string-count str #\newline)))
+                 (col (string-width str (string-cursor->index str nl-index))))
+          (with! (col (+ col (string-width str))))))))
 
 ;;> Captures the output of \var{producer} and formats the result with
 ;;> \var{consumer}.
