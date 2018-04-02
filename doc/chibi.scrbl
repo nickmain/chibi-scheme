@@ -373,6 +373,7 @@ void dostuff(sexp ctx) {
 
 int main(int argc, char** argv) {
   sexp ctx;
+  sexp_scheme_init();
   ctx = sexp_make_eval_context(NULL, NULL, NULL, 0, 0);
   sexp_load_standard_env(ctx, NULL, SEXP_SEVEN);
   sexp_load_standard_ports(ctx, NULL, stdin, stdout, stderr, 1);
@@ -901,6 +902,28 @@ default argument \var{param} should be the name of a parameter bound in
 Defines a new simple record type having \var{slots} new slots in addition
 to any inherited from the parent type \var{parent}.  If \var{parent} is false,
 inherits from the default \var{object} record type.
+}}
+
+\item{\ccode{sexp sexp_register_c_type(sexp ctx, sexp name, sexp finalizer)}
+\p{
+Shortcut to defines a new type as a wrapper around a C pointer.
+Returns the type object, which can be used with sexp_make_cpointer to
+wrap instances of the type.  The finalizer may be sexp_finalize_c_type
+in which case managed pointers are freed as if allocated with malloc,
+NULL in which case the pointers are never freed, or otherwise a
+procedure of one argument which should release any resources.
+}}
+
+\item{\ccode{sexp sexp_make_cpointer(sexp ctx, sexp_uint_t type_id, void* value, sexp parent, int freep)}
+\p{
+Creates a new instance of the type indicated by type_id wrapping
+value. If parent is provided, references to the child will also
+preserve the parent, important e.g. to preserve an enclosing struct
+when wrapped references to nested structs are still in use.  If freep
+is true, then when reclaimed by the GC the finalizer for this type,
+if any, will be called on the instance.
+
+You can retrieve the id from a type object with sexp_type_tag(type).
 }}
 
 ]

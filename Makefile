@@ -197,11 +197,11 @@ lib/chibi/ast$(SO): lib/chibi/ast.c $(INCLUDES) libchibi-scheme$(SO)
 lib/chibi.img: $(CHIBI_DEPENDENCIES) all-libs
 	$(CHIBI) -d $@
 
-lib/red.img: $(CHIBI_DEPENDENCIES) all-libs
-	$(CHIBI) -xscheme.red -d $@
-
 lib/snow.img: $(CHIBI_DEPENDENCIES) all-libs
-	$(CHIBI) -mchibi.snow.commands -mchibi.snow.interface -mchibi.snow.package -mchibi.snow.utils -d $@
+	$(CHIBI) -mchibi.snow.commands -d $@
+
+lib/red.img: $(CHIBI_DEPENDENCIES) all-libs
+	$(CHIBI) -xscheme.red -mchibi.repl -d $@
 
 doc: doc/chibi.html doc-libs
 
@@ -270,6 +270,9 @@ test-snow: chibi-scheme$(EXE) $(IMAGE_FILES)
 test-unicode: chibi-scheme$(EXE)
 	$(CHIBI) -xchibi tests/unicode-tests.scm
 
+test-division: chibi-scheme$(EXE)
+	$(CHIBI) tests/division-tests.scm
+
 test-libs: chibi-scheme$(EXE)
 	$(CHIBI) tests/lib-tests.scm
 
@@ -281,7 +284,7 @@ test-r7rs: chibi-scheme$(EXE)
 
 test: test-r7rs
 
-test-all: test test-libs test-ffi
+test-all: test test-libs test-ffi test-division
 
 test-dist: test-all test-memory test-build
 
@@ -297,7 +300,7 @@ clean: clean-libs
 
 cleaner: clean
 	-$(RM) chibi-scheme$(EXE) chibi-scheme-static$(EXE) chibi-scheme-ulimit$(EXE) \
-	    $(IMAGE_FILES) libchibi-scheme$(SO)* *.a *.pc \
+	    $(IMAGE_FILES) libchibi-scheme*$(SO) *.a *.pc \
 	    include/chibi/install.h lib/.*.meta \
 	    chibi-scheme-emscripten \
 	    js/chibi.* \
@@ -315,7 +318,7 @@ install-base: all
 	$(MKDIR) $(DESTDIR)$(MODDIR)/chibi/char-set $(DESTDIR)$(MODDIR)/chibi/crypto $(DESTDIR)$(MODDIR)/chibi/io $(DESTDIR)$(MODDIR)/chibi/iset $(DESTDIR)$(MODDIR)/chibi/loop $(DESTDIR)$(MODDIR)/chibi/match $(DESTDIR)$(MODDIR)/chibi/math $(DESTDIR)$(MODDIR)/chibi/monad $(DESTDIR)$(MODDIR)/chibi/net $(DESTDIR)$(MODDIR)/chibi/optimize $(DESTDIR)$(MODDIR)/chibi/parse $(DESTDIR)$(MODDIR)/chibi/regexp $(DESTDIR)$(MODDIR)/chibi/show $(DESTDIR)$(MODDIR)/chibi/snow $(DESTDIR)$(MODDIR)/chibi/term
 	$(MKDIR) $(DESTDIR)$(MODDIR)/scheme/char
 	$(MKDIR) $(DESTDIR)$(MODDIR)/scheme/time
-	$(MKDIR) $(DESTDIR)$(MODDIR)/srfi/1 $(DESTDIR)$(MODDIR)/srfi/18 $(DESTDIR)$(MODDIR)/srfi/27 $(DESTDIR)$(MODDIR)/srfi/151 $(DESTDIR)$(MODDIR)/srfi/39 $(DESTDIR)$(MODDIR)/srfi/69 $(DESTDIR)$(MODDIR)/srfi/95 $(DESTDIR)$(MODDIR)/srfi/99 $(DESTDIR)$(MODDIR)/srfi/99/records $(DESTDIR)$(MODDIR)/srfi/117 $(DESTDIR)$(MODDIR)/srfi/121 $(DESTDIR)$(MODDIR)/srfi/125 $(DESTDIR)$(MODDIR)/srfi/128 $(DESTDIR)$(MODDIR)/srfi/129 $(DESTDIR)$(MODDIR)/srfi/132 $(DESTDIR)$(MODDIR)/srfi/133 $(DESTDIR)$(MODDIR)/srfi/143 $(DESTDIR)$(MODDIR)/srfi/144
+	$(MKDIR) $(DESTDIR)$(MODDIR)/srfi/1 $(DESTDIR)$(MODDIR)/srfi/18 $(DESTDIR)$(MODDIR)/srfi/27 $(DESTDIR)$(MODDIR)/srfi/151 $(DESTDIR)$(MODDIR)/srfi/39 $(DESTDIR)$(MODDIR)/srfi/69 $(DESTDIR)$(MODDIR)/srfi/95 $(DESTDIR)$(MODDIR)/srfi/99 $(DESTDIR)$(MODDIR)/srfi/99/records $(DESTDIR)$(MODDIR)/srfi/113 $(DESTDIR)$(MODDIR)/srfi/117 $(DESTDIR)$(MODDIR)/srfi/121 $(DESTDIR)$(MODDIR)/srfi/125 $(DESTDIR)$(MODDIR)/srfi/128 $(DESTDIR)$(MODDIR)/srfi/129 $(DESTDIR)$(MODDIR)/srfi/132 $(DESTDIR)$(MODDIR)/srfi/133 $(DESTDIR)$(MODDIR)/srfi/135 $(DESTDIR)$(MODDIR)/srfi/143 $(DESTDIR)$(MODDIR)/srfi/144 $(DESTDIR)$(MODDIR)/srfi/159
 	$(INSTALL) -m0644 $(META_FILES) $(DESTDIR)$(MODDIR)/
 	$(INSTALL) -m0644 lib/*.scm $(DESTDIR)$(MODDIR)/
 	$(INSTALL) -m0644 lib/chibi/*.sld lib/chibi/*.scm $(DESTDIR)$(MODDIR)/chibi/
@@ -347,6 +350,7 @@ install-base: all
 	$(INSTALL) -m0644 lib/srfi/95/*.scm $(DESTDIR)$(MODDIR)/srfi/95/
 	$(INSTALL) -m0644 lib/srfi/99/*.sld $(DESTDIR)$(MODDIR)/srfi/99/
 	$(INSTALL) -m0644 lib/srfi/99/records/*.sld lib/srfi/99/records/*.scm $(DESTDIR)$(MODDIR)/srfi/99/records/
+	$(INSTALL) -m0644 lib/srfi/113/*.scm $(DESTDIR)$(MODDIR)/srfi/113/
 	$(INSTALL) -m0644 lib/srfi/117/*.scm $(DESTDIR)$(MODDIR)/srfi/117/
 	$(INSTALL) -m0644 lib/srfi/121/*.scm $(DESTDIR)$(MODDIR)/srfi/121/
 	$(INSTALL) -m0644 lib/srfi/125/*.scm $(DESTDIR)$(MODDIR)/srfi/125/
@@ -354,9 +358,11 @@ install-base: all
 	$(INSTALL) -m0644 lib/srfi/129/*.scm $(DESTDIR)$(MODDIR)/srfi/129/
 	$(INSTALL) -m0644 lib/srfi/132/*.scm $(DESTDIR)$(MODDIR)/srfi/132/
 	$(INSTALL) -m0644 lib/srfi/133/*.scm $(DESTDIR)$(MODDIR)/srfi/133/
+	$(INSTALL) -m0644 lib/srfi/135/*.sld lib/srfi/135/*.scm $(DESTDIR)$(MODDIR)/srfi/135/
 	$(INSTALL) -m0644 lib/srfi/143/*.scm $(DESTDIR)$(MODDIR)/srfi/143/
 	$(INSTALL) -m0644 lib/srfi/144/*.scm $(DESTDIR)$(MODDIR)/srfi/144/
 	$(INSTALL) -m0644 lib/srfi/151/*.scm $(DESTDIR)$(MODDIR)/srfi/151/
+	$(INSTALL) -m0644 lib/srfi/159/*.sld $(DESTDIR)$(MODDIR)/srfi/159/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/crypto/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/io/
 	$(MKDIR) $(DESTDIR)$(BINMODDIR)/chibi/optimize/
