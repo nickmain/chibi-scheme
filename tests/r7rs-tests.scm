@@ -447,6 +447,20 @@
 (be-like-begin3 sequence3)
 (test 5 (sequence3 2 3 4 5))
 
+;; ellipsis escape
+(define-syntax elli-esc-1
+  (syntax-rules ()
+    ((_)
+     '(... ...))
+    ((_ x)
+     '(... (x ...)))
+    ((_ x y)
+     '(... (... x y)))))
+
+(test '... (elli-esc-1))
+(test '(100 ...) (elli-esc-1 100))
+(test '(... 100 200) (elli-esc-1 100 200))
+
 ;; Syntax pattern with ellipsis in middle of proper list.
 (define-syntax part-2
   (syntax-rules ()
@@ -1591,6 +1605,12 @@
 (test #t (call-with-current-continuation procedure?))
 
 (test 7 (apply + (list 3 4)))
+(test 7 (apply + 3 4 (list)))
+(test-error (apply +)) ;; not enough args
+(test-error (apply + 3)) ;; final arg not a list
+(test-error (apply + 3 4)) ;; final arg not a list
+(test-error (apply + '(2 3 . 4))) ;; final arg is improper
+
 
 (define compose
   (lambda (f g)

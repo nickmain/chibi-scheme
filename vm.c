@@ -1174,10 +1174,18 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     bc = sexp_procedure_code(self);
     cp = sexp_procedure_vars(self);
     ip = (sexp_bytecode_data(bc)+sexp_unbox_fixnum(stack[fp+1])) - sizeof(sexp);
-    for (top=fp-j+i-1; sexp_pairp(tmp2); tmp2=sexp_cdr(tmp2), top--)
-      stack[top] = sexp_car(tmp2);
-    top = fp+i-j+1;
-    fp = k;
+    {
+      int prev_top = top;
+      for (top=fp-j+i-1; sexp_pairp(tmp2); tmp2=sexp_cdr(tmp2), top--)
+        stack[top] = sexp_car(tmp2);
+      top = fp+i-j+1;
+      fp = k;
+      /* if final cdr of tmp2 isn't null, then args list was improper */
+      if (! sexp_nullp(tmp2)) {
+        top = prev_top;
+        sexp_raise("apply: improper args list", sexp_list1(ctx, stack[prev_top-2]));
+      }
+    }
     goto make_call;
   case SEXP_OP_TAIL_CALL:
     _ALIGN_IP();
@@ -1721,11 +1729,11 @@ sexp sexp_apply (sexp ctx, sexp proc, sexp args) {
     sexp_context_top(ctx) = --top;
 #if SEXP_USE_BIGNUMS
     if (sexp_fixnump(tmp1) && sexp_fixnump(tmp2)) {
-      prod = (sexp_lsint_t)sexp_unbox_fixnum(tmp1) * sexp_unbox_fixnum(tmp2);
-      if ((prod < SEXP_MIN_FIXNUM) || (prod > SEXP_MAX_FIXNUM))
+      prod = lsint_mul_sint(lsint_from_sint(sexp_unbox_fixnum(tmp1)), sexp_unbox_fixnum(tmp2));
+      if (!lsint_is_fixnum(prod))
         _ARG1 = sexp_mul(ctx, tmp1=sexp_fixnum_to_bignum(ctx, tmp1), tmp2);
       else
-        _ARG1 = sexp_make_fixnum(prod);
+        _ARG1 = sexp_make_fixnum(lsint_to_sint(prod));
     }
     else {
       _ARG1 = sexp_mul(ctx, tmp1, tmp2);

@@ -209,10 +209,6 @@ enum sexp_types {
 #endif
 
 #ifdef _WIN32
-#if defined(_MSC_VER) && SEXP_64_BIT
-/* On SEXP_64_BIT, 128bits arithmetic is mandatory */
-#error Unsupported configuration
-#endif
 #if SEXP_64_BIT
 typedef unsigned int sexp_tag_t;
 typedef unsigned long long sexp_uint_t;
@@ -287,9 +283,20 @@ typedef short sexp_int32_t;
 #endif
 
 #if defined(__APPLE__) || defined(_WIN64) || (defined(__CYGWIN__) && __SIZEOF_POINTER__ == 8)
-#define PRIoff "%lld"
+#define SEXP_PRIdOFF "lld"
 #else
-#define PRIoff "%ld"
+#define SEXP_PRIdOFF "ld"
+#endif
+
+#if defined(__GNUC__) || defined(_WIN64) || defined(__APPLE__)
+#include <stdint.h>
+#if SEXP_64_BIT
+#define SEXP_PRIdFIXNUM PRId64
+#else
+#define SEXP_PRIdFIXNUM PRId32
+#endif
+#else
+#define SEXP_PRIdFIXNUM "ld"
 #endif
 
 #if SEXP_USE_LONG_PROCEDURE_ARGS
@@ -891,8 +898,15 @@ SEXP_API int sexp_idp(sexp x);
 #endif
 
 #if SEXP_USE_BIGNUMS
+SEXP_API sexp sexp_make_integer_from_lsint(sexp ctx, sexp_lsint_t x);
+SEXP_API sexp sexp_make_unsigned_integer_from_luint(sexp ctx, sexp_luint_t x);
+#if SEXP_USE_CUSTOM_LONG_LONGS
+#define sexp_make_integer(ctx, x) sexp_make_fixnum(x)
+#define sexp_make_unsigned_integer(ctx, x) sexp_make_fixnum(x)
+#else
 SEXP_API sexp sexp_make_integer(sexp ctx, sexp_lsint_t x);
 SEXP_API sexp sexp_make_unsigned_integer(sexp ctx, sexp_luint_t x);
+#endif
 #define sexp_exact_integerp(x) (sexp_fixnump(x) || sexp_bignump(x))
 #else
 #define sexp_make_integer(ctx, x) sexp_make_fixnum(x)
@@ -1532,7 +1546,7 @@ SEXP_API sexp sexp_read_symbol (sexp ctx, sexp in, int init, int internp);
 SEXP_API sexp sexp_read_number (sexp ctx, sexp in, int base, int exactp);
 #if SEXP_USE_BIGNUMS
 SEXP_API sexp sexp_read_bignum (sexp ctx, sexp in, sexp_uint_t init,
-				signed char sign, sexp_uint_t base);
+                                signed char sign, sexp_uint_t base);
 SEXP_API sexp sexp_write_bignum (sexp ctx, sexp a, sexp out, sexp_uint_t base);
 #endif
 SEXP_API sexp sexp_read_float_tail(sexp ctx, sexp in, double whole, int negp);

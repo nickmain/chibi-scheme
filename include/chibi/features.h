@@ -301,6 +301,16 @@
 #endif
 #endif
 
+/* for bignum support, need a double long to store long*long */
+/* gcc supports uint128_t, otherwise we need a custom struct */
+#ifndef SEXP_USE_CUSTOM_LONG_LONGS
+#if SEXP_64_BIT && !defined(__GNUC__)
+#define SEXP_USE_CUSTOM_LONG_LONGS 1
+#else
+#define SEXP_USE_CUSTOM_LONG_LONGS 0
+#endif
+#endif
+
 #ifndef SEXP_USE_NO_FEATURES
 #define SEXP_USE_NO_FEATURES 0
 #endif

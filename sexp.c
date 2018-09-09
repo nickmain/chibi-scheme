@@ -1471,6 +1471,7 @@ int sexp_buffered_flush (sexp ctx, sexp p, int forcep) {
       tmp = sexp_list2(ctx, SEXP_ZERO, sexp_make_fixnum(sexp_port_offset(p)));
       tmp = sexp_cons(ctx, sexp_port_binaryp(p) ? sexp_string_bytes(sexp_port_buffer(p)) : sexp_port_buffer(p), tmp);
       tmp = sexp_apply(ctx, sexp_port_writer(p), tmp);
+      sexp_port_offset(p) = 0;
       res = (sexp_fixnump(tmp) && sexp_unbox_fixnum(tmp) > 0) ? 0 : -1;
     } else {                      /* string port */
       tmp = sexp_c_string(ctx, sexp_port_buf(p), off);
@@ -2110,7 +2111,7 @@ sexp sexp_write_one (sexp ctx, sexp obj, sexp out) {
       break;
     }
   } else if (sexp_fixnump(obj)) {
-    snprintf(numbuf, NUMBUF_LEN, "%ld", (long)sexp_unbox_fixnum(obj));
+    snprintf(numbuf, NUMBUF_LEN, "%" SEXP_PRIdFIXNUM, (long)sexp_unbox_fixnum(obj));
     sexp_write_string(ctx, numbuf, out);
 #if SEXP_USE_IMMEDIATE_FLONUMS
   } else if (sexp_flonump(obj)) {
@@ -3120,7 +3121,7 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
           } else {
             res = 0;
             for (c2=0; c2 < sexp_num_char_names; c2++) {
-              if (strcasecmp(str, sexp_char_names[c2].name) == 0) {
+              if ((sexp_port_fold_casep(in) ? strcasecmp : strcmp)(str, sexp_char_names[c2].name) == 0) {
                 res = sexp_make_character(sexp_char_names[c2].ch);
                 break;
               }
@@ -3253,6 +3254,8 @@ sexp sexp_read_raw (sexp ctx, sexp in, sexp *shares) {
             res = sexp_string_to_number(ctx, res, SEXP_TEN);
             if (sexp_complexp(res) && (sexp_complex_real(res) == SEXP_ZERO))
               sexp_complex_real(res) = tmp;
+            else if (res == SEXP_ZERO)
+              res = tmp;
             else if (!sexp_exceptionp(res))
               res = sexp_read_error(ctx, "invalid complex infinity", res, in);
           } else {
